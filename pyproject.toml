@@ -1,0 +1,28 @@
+[project]
+name = "physicalview"
+version = "0.1.0"
+description = "PhysicalView: interactive GPU-backed viser studio for the SimAny real-to-sim pipeline (scene, generation, registration, inpainting, robot policies)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Runyi Yang" }]
+dependencies = [
+  "viser>=1.1.0",
+  "mujoco>=3.10",
+  "numpy>=1.26,<2",
+  "scipy",
+  "trimesh",
+  "plyfile",
+  "pillow",
+  "pyyaml",
+  "imageio",
+  "opencv-python-headless",
+]
+# torch (CUDA 12.8 build) and gsplat (compiled from source for sm_80/86/90/120) are managed by
+# run/setup_env.sh, not by pip resolution; see docs/ENV.md.
+
+[tool.setuptools.packages.find]
+include = ["physicalview*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
