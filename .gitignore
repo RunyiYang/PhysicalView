@@ -6,3 +6,4 @@ __pycache__/
 torch_extensions/
 *.egg-info/
 .uv-cache/
+MUJOCO_LOG.TXT
