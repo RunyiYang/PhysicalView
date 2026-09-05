@@ -20,8 +20,11 @@ export SIMANY_ROOT
 # ---- interpreter -----------------------------------------------------------
 # The env lives in the MAIN checkout's gitignored .envs/; worktrees symlink
 # .envs there, readlink -f resolves the symlink so the path is canonical.
-_envs=$(readlink -f "$PHYSICALVIEW_ROOT/.envs" 2>/dev/null || echo "$PHYSICALVIEW_ROOT/.envs")
-export STUDIO_ENV_DIR=${STUDIO_ENV_DIR:-$_envs/studio}   # may be a symlink to a shared built env
+# readlink -f the env dir ITSELF: it may be a symlink to a shared built env, and torch keys
+# its JIT cache (TORCH_EXTENSIONS_DIR below) on the textual path -> a non-canonical path
+# would trigger a needless multi-minute gsplat rebuild.
+_env=$(readlink -f "$PHYSICALVIEW_ROOT/.envs/studio" 2>/dev/null || echo "$PHYSICALVIEW_ROOT/.envs/studio")
+export STUDIO_ENV_DIR=${STUDIO_ENV_DIR:-$_env}
 export STUDIO_PY=${STUDIO_PY:-$STUDIO_ENV_DIR/bin/python}
 
 # ---- CUDA toolchain (must match the build) --------------------------------
