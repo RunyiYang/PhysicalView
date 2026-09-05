@@ -52,6 +52,15 @@ class GpuTarget:
     time: str = "03:50:00"
 
 
+@dataclass(frozen=True)
+class StreamConfig:
+    """viewer.stream: defaults of the server-render JPEG stream (physicalview.streaming)."""
+    max_width: int = 1280          # frame width cap (720p); the Scene tab offers 720p/1080p/native
+    jpeg_quality: int = 80
+    max_fps: float = 15.0
+    moving_scale: float = 0.5      # render scale while the camera moves; full-res frame when it settles
+
+
 @dataclass
 class StudioConfig:
     repo_root: Path                 # SimAny checkout (stage scripts, agents/robo/models)
@@ -79,6 +88,8 @@ class StudioConfig:
     max_splats_object: int
     render_wh: tuple[int, int]
     control_hz: int
+    display_mode: str = "server"            # viewer.display_mode: server (GPU render -> JPEG stream) | client (WebGL splats)
+    stream: StreamConfig = field(default_factory=StreamConfig)
     raw: dict[str, Any] = field(default_factory=dict)
 
     def interpreter(self, key: str) -> Path:
@@ -125,6 +136,13 @@ def load_config(path: str | os.PathLike | None = None,
     models = raw.get("models", {})
     viewer = raw.get("viewer", {})
     ps = raw.get("policy_server", {})
+    display_mode = str(viewer.get("display_mode", "server")).lower()
+    if display_mode not in ("server", "client"):
+        raise ValueError(f"viewer.display_mode must be 'server' or 'client', got {display_mode!r}")
+    st = viewer.get("stream") or {}
+    stream = StreamConfig(
+        max_width=int(st.get("max_width", 1280)), jpeg_quality=int(st.get("jpeg_quality", 80)),
+        max_fps=float(st.get("max_fps", 15)), moving_scale=float(st.get("moving_scale", 0.5)))
     return StudioConfig(
         repo_root=root,
         package_root=PACKAGE_ROOT,
@@ -152,5 +170,7 @@ def load_config(path: str | os.PathLike | None = None,
         max_splats_object=int(viewer.get("max_splats_object", 200_000)),
         render_wh=tuple(int(x) for x in viewer.get("render_wh", (640, 360))),  # type: ignore[arg-type]
         control_hz=int(viewer.get("control_hz", 15)),
+        display_mode=display_mode,
+        stream=stream,
         raw=raw,
     )

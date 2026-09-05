@@ -29,6 +29,10 @@ CONTRACT (robot agent). Built on robo.envs.pi05_env.DroidSimEnv (DO NOT fork it)
     session.body_reset_poses -> {obj: (pos, quat)} captured after reset (for
         splats.frame_transform)
     session.robot_mask(cam_name) -> uint8 mask from robo.rendering.mujoco_masks
+    session.locked() -> the session RLock (``with session.locked():``) for callers that
+        touch model/data themselves (the server-render stream's MuJoCo pass)
+    session.live_body_poses() -> (body_poses, reset_poses) under the lock
+    session.robot_geom_ids() -> cached geom ids of the robot bodies (mask rendering)
     session.close()
 
     author_task(state, target_obj, receptacle_obj | None, region | None, instruction) ->
@@ -276,6 +280,22 @@ class RobotSession:
     def lock(self) -> threading.RLock:
         return self._lock
 
+    def locked(self) -> threading.RLock:
+        """Context manager serialising MuJoCo access with the control loop / episode
+        thread: ``with session.locked(): ...`` (re-entrant)."""
+        return self._lock
+
+    @_synced
+    def live_body_poses(self) -> tuple[dict[str, tuple[np.ndarray, np.ndarray]],
+                                       dict[str, tuple[np.ndarray, np.ndarray]]]:
+        """(current body poses, reset poses) of the free objects, for posing their
+        gaussians with splats.frame_transform."""
+        return self._body_poses(), dict(self.body_reset_poses)
+
+    def robot_geom_ids(self) -> np.ndarray:
+        """Geom ids of the robot (bodies under ROBOT_ROOTS), cached; used for masks."""
+        return self._robot_geoms()
+
     @property
     def free_bodies(self) -> list[str]:
         return list(self.env.free_bodies)
@@ -398,9 +418,14 @@ class RobotSession:
     # -------------------------------------------------------------- observation --
     def _robot_geoms(self) -> np.ndarray:
         if self._robot_geom_ids is None:
-            from robo.rendering import mujoco_masks
-            self._robot_geom_ids = np.asarray(
-                sorted(mujoco_masks.robot_geom_ids(self.model, self.ROBOT_ROOTS)), dtype=np.int64)
+            try:
+                from robo.rendering import mujoco_masks
+                ids = set(mujoco_masks.robot_geom_ids(self.model, self.ROBOT_ROOTS))
+            except Exception:  # noqa: BLE001 - robo unavailable: bodies named robot/... directly
+                m = self.model
+                ids = {g for g in range(m.ngeom)
+                       if (m.body(int(m.geom_bodyid[g])).name or "").startswith(self.ROBOT_ROOTS)}
+            self._robot_geom_ids = np.asarray(sorted(ids), dtype=np.int64)
         return self._robot_geom_ids
 
     @_synced

@@ -12,10 +12,12 @@ Entry point: `python -m physicalview.app --port 8080` (see `run/launch.sh`).
 
 * The cluster has no display; Isaac Sim's RTX renderer segfaults on driver 595.x
   (docs/POLARIS_INTEGRATION.md). Newton is a physics engine, not a UI.
-* viser serves a browser client from any GPU node; the 3D navigation view renders the
-  Gaussian splats **client-side (WebGL)**, so it works on every GPU type. CUDA is used
-  where it matters: gsplat photoreal camera renders (policy observations, snapshots),
-  MuJoCo EGL raster, and model inference.
+* viser serves a browser client from any GPU node. By default the 3D view is a **server
+  render**: gsplat renders the browser camera's view on the GPU and the frame is streamed
+  as a JPEG background image (see "Display modes"); the browser holds no splat data. A
+  client-side WebGL splat mode remains as a fallback. CUDA is used where it matters:
+  gsplat renders (viewer stream, policy observations, snapshots), MuJoCo EGL raster, and
+  model inference.
 * `interface/viewer.py` and `interface/mujoco_live_viewer.py` already prove the
   splat-per-body + gizmo pattern; Studio generalizes them.
 
@@ -49,6 +51,8 @@ physicalview/
                     posed by 4x4; importance subsampling; caches
   render.py         CUDA gsplat renders: any camera, composite (bg + posed objects),
                     thumbnails, MuJoCo robot mask overlay
+  streaming.py      server-render display mode: per-client GPU render -> JPEG background
+                    stream (viser camera -> w2c/K, MuJoCo free-camera robot composite)
   jobs.py           Job/JobManager: subprocess or Slurm dispatch, live logs, cancel
   pipeline.py       command builders for every stage + model/mode choices
   ik.py             damped-least-squares IK for the Panda (MuJoCo jacobians)
@@ -72,6 +76,8 @@ class Context:
     robot: RobotSession | None    # created lazily by the robot panel
     selection: Selection          # selected object id / 3D box / camera frame
     events: EventBus              # publish/subscribe by topic (see below)
+    display_mode: str             # "server" | "client" (scene panel keeps it current)
+    stream: ServerRenderStream | None   # server-render stream (scene panel)
     log(msg) / set_status(msg)
 ```
 
@@ -84,8 +90,53 @@ Event topics (payload):
 | `selection.changed` | `Selection` | scene_panel / inpaint_panel |
 | `job.updated` | `Job` | JobManager (state or log change) |
 | `robot.tick` | dict(qpos, body poses, obs images) | RobotSession loop |
+| `scene.pose_edited` | {object, T} at the end of a gizmo drag | scene_panel |
+| `inpaint.version_selected` | clean-background ply path or None | inpaint_panel |
+| `display.invalidate` | None — re-render the server stream (coalesced) | any panel (quality/resolution/layers/gizmo) |
+| `display.mode_changed` | "server" \| "client" | scene_panel |
 
 Panels only talk to each other through `ctx` and events; no cross-imports of panels.
+
+## Display modes (scene_panel.py / streaming.py)
+
+The Scene tab's **Display** dropdown selects how the 3D view is produced
+(`viewer.display_mode` in the config, default `server`):
+
+* **Server render (JPEG stream, recommended).** `ServerRenderStream` keeps one daemon
+  render thread per connected browser client. The client's camera (`position`, `wxyz`,
+  vertical `fov`, canvas size — viser follows OpenCV conventions) is converted to an
+  OpenCV `w2c`/`K`, `render.Renderer` renders background + accepted objects (edited poses
+  and live MuJoCo body poses respected) and, when a `RobotSession` exists and "Show robot"
+  is on, MuJoCo is rendered from the same view with a free camera (`mjCAMERA_FREE`,
+  `model.vis.global_.fovy` = the viewer fov) plus a segmentation render for the robot mask;
+  `Renderer.composite_with_robot` puts robot pixels over the splats. The frame is pushed
+  with `client.scene.set_background_image(rgb, format="jpeg", jpeg_quality=q)`. Camera
+  motion and scene events (`scene.loaded`, `scene.objects_changed`, `scene.pose_edited`,
+  `selection.changed`, `robot.tick`, `inpaint.version_selected`, `display.invalidate`)
+  only set flags: at most one render is pending per client (frames are dropped, never
+  queued), frames are rendered at `moving_scale` while the camera moved within the last
+  150 ms and one full-resolution frame follows when it settles, never above `max_fps`.
+  Size = min(canvas width, `max_width`) × matching height (720p / 1080p / native in the
+  UI). **Why this fixes browser memory:** in the old client mode the browser received
+  every Gaussian (up to 1.5 M background splats + per-object splats as float32 centers,
+  3×3 covariances, colours and opacities — hundreds of MB of typed arrays plus WebGL
+  buffers) and rendered them itself; laptops ran out of memory. In server mode the
+  browser holds zero splat data — only a JPEG (~100-300 KB per frame) and lightweight
+  helpers: a small axes frame per object (`/helpers/obj_XX`), the highlight box, the
+  transform gizmo, the selected camera's frustum and the optional mesh/collision layers.
+  Everything heavy runs on the server; viser is display only. The Robot tab creates no
+  robot geom meshes in this mode (the robot is in the stream). Without a GPU renderer the
+  stream logs once and stays idle (the panel falls back to client mode on CPU-only nodes).
+* **Client splats (WebGL, high memory).** The previous behaviour: importance-subsampled
+  splat arrays capped by `viewer.max_splats_background` / `max_splats_object` are uploaded
+  as `/background` and `/objects/obj_XX` nodes and rendered in the browser. Handles are
+  replaced, never accumulated, on reload / `scene.objects_changed` / `robot.tick`.
+
+Config: `viewer.display_mode: server`, `viewer.stream: {max_width: 1280, jpeg_quality: 80,
+max_fps: 15, moving_scale: 0.5}`. Switching at runtime tears the other mode down and
+publishes `display.mode_changed`. Headless check: `physicalview.smoke` step
+`server_render_stream` renders a scene camera and an orbit camera through
+`ServerRenderStream.render_for_camera` and asserts the robot composite differs.
 
 ## Stage → environment routing (pipeline.py / jobs.py)
 

@@ -41,3 +41,14 @@ ssh -L 8080:<node>:8080 <login-host>   ->  http://localhost:8080
 * TRELLIS / ReconViaGen / SAM3D / pi0.5 server envs are cu124/cu121 builds: on the Blackwell node they are dispatched to A6000/H200 via Slurm automatically.
 * No pi0.5 server was started during the smoke (12 GB checkpoint, needs 100 GB RAM job); the scripted policy exercised the episode loop.
 * `physics` stage has no per-object flag upstream (annotates all non-rejected objects).
+
+## 2026-09-05 — server render display mode (browser memory fix)
+
+The Scene tab now defaults to **server render**: `physicalview/streaming.py` renders the browser
+camera's view on the GPU (gsplat, robot composited from MuJoCo via a free camera) and streams JPEG
+frames as the viewer background; the browser holds no gaussian data (client WebGL splats remain as a
+fallback mode). Verified on hala / A6000 (job 832089): `physicalview.smoke` **ALL PASS (10/10)** with
+the new `server_render_stream` step (viser-camera conversion 43.3 dB vs `Renderer.render_camera`,
+robot composite changes 2.3 % of pixels, mask 2.4 %) and the `viser_server` step loading the scene
+through the real panel: 0 splat nodes in server mode (17 helper frames + frustum), 17 splat nodes in
+client mode, clean switch back. CPU tests: 118 passed, 13 skipped (`tests/test_streaming.py` added).

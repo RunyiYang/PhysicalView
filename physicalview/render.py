@@ -18,7 +18,8 @@ missing so the UI can degrade to client-side splats only.
             as robo/rendering/pi05_render.py: sim-over-splat).
         thumbnail(obj_id, source=None, size=192) -> uint8 [size,size,3] turntable-ish
             render of one canonical proposal on white (for proposal cards).
-        set_background(kind: "raw"|"clean") ; kind switches which gaussians are used.
+        set_background(kind: "raw"|"clean", force=False) ; kind switches which gaussians are
+            used; force=True re-uploads the current kind (state.clean_bg_gs was replaced).
 
     def mujoco_camera_to_w2c_K(model, data, cam_name, wh) -> (w2c 4x4 OpenCV, K 3x3)
         so the photoreal view matches the MuJoCo camera exactly (reuse the conversion in
@@ -128,13 +129,13 @@ class Renderer:
     def sh_degree(self) -> int:
         return int(self._bg["sh_degree"]) if self._bg is not None else 0
 
-    def set_background(self, kind: str) -> None:
+    def set_background(self, kind: str, force: bool = False) -> None:
         if kind not in ("raw", "clean"):
             raise ValueError(f"background kind must be 'raw' or 'clean', got {kind!r}")
         src = self.state.clean_bg_gs if kind == "clean" else self.state.splat_gs
         if src is None:
             raise RenderUnavailable(f"no {kind} background gaussians loaded for this scene")
-        if kind == self._bg_kind:
+        if kind == self._bg_kind and not force:
             return
         import torch
         with self._lock:

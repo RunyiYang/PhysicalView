@@ -15,8 +15,13 @@ Sections
      (drag -> IK -> targets, IK residual shown), "Physics running" (15 Hz hold_tick loop).
 
 Every tick publishes ``robot.tick`` with {'body_poses', 'reset_poses', 'qpos', 'stages',
-'sim_time'} so the scene panel can re-pose object splats, and the robot's visual geoms are
-mirrored as viser meshes (one node per geom, position/wxyz updated per tick, <= 15 Hz).
+'sim_time'} so the scene panel can re-pose object splats / frames and the server-render
+stream re-renders. Display modes (``ctx.display_mode``, topic ``display.mode_changed``):
+in *client* mode the robot's visual geoms are mirrored as viser meshes (one node per geom,
+created once per session, position/wxyz updated per tick, <= 15 Hz); in *server* mode no
+robot meshes are created — the robot is composited into the streamed JPEG by
+physicalview.streaming. "Show robot in 3D view" toggles either. The two observation
+images are created once and updated in place.
 
 viser is imported only inside build() so the module imports in CPU test environments.
 """
@@ -61,8 +66,8 @@ class _State:
     last_image_t: float = 0.0
     last_slider_t: float = 0.0
     last_publish_t: float = 0.0
-    robot_nodes: dict[int, Any] = field(default_factory=dict)    # geom id -> viser handle
-    robot_nodes_model_id: int | None = None
+    robot_nodes: dict[int, Any] = field(default_factory=dict)    # geom id -> viser handle (client mode)
+    robot_nodes_session: Any = None                              # session whose geoms are mirrored
     gizmo: Any = None
     gizmo_user_moving: bool = False
     closing: bool = False
@@ -107,6 +112,8 @@ def build(ctx) -> None:
 
     gui.add_markdown("### Robot — Franka + 2F-85 over the exported scene")
     status = gui.add_markdown("_Load a scene with a task suite (Export MJCF + Generate tasks)._")
+    show_robot_cb = gui.add_checkbox("Show robot in 3D view", True,
+                                     hint="client mode: robot geom meshes; server mode: robot composited into the stream")
 
     def say(msg: str) -> None:
         try:
@@ -237,17 +244,32 @@ def build(ctx) -> None:
         say(f"authored {task['task_id']}")
 
     # --------------------------------------------------------- robot 3D mirror --
-    def ensure_robot_nodes(sess: RobotSession) -> None:
-        if st.robot_nodes_model_id == id(sess.model):
-            return
+    # Server-render mode: the robot is part of the streamed JPEG (MuJoCo raster composited
+    # over the splats), so no geom meshes are mirrored. Client mode: one mesh node per visual
+    # geom, created ONCE per session (identity, not id(model)) and only re-posed per tick.
+    def display_mode() -> str:
+        return getattr(ctx, "display_mode", "client")
+
+    def remove_robot_nodes() -> None:
         for h in st.robot_nodes.values():
             try:
                 h.remove()
             except Exception:  # noqa: BLE001
                 pass
         st.robot_nodes.clear()
+        st.robot_nodes_session = None
+
+    def ensure_robot_nodes(sess: RobotSession) -> None:
+        if display_mode() != "client":
+            if st.robot_nodes:
+                remove_robot_nodes()
+            return
+        if st.robot_nodes_session is sess and st.robot_nodes:
+            return
+        remove_robot_nodes()
         import mujoco
         m = sess.model
+        visible = bool(show_robot_cb.value)
         for g in range(m.ngeom):
             bname = m.body(m.geom_bodyid[g]).name or ""
             if not bname.startswith("robot/"):
@@ -261,11 +283,11 @@ def build(ctx) -> None:
             try:
                 if gtype == mujoco.mjtGeom.mjGEOM_MESH:
                     verts, faces = _mesh_arrays(m, g)
-                    h = server.scene.add_mesh_simple(name, verts, faces, color=color)
+                    h = server.scene.add_mesh_simple(name, verts, faces, color=color, visible=visible)
                 elif gtype == mujoco.mjtGeom.mjGEOM_BOX:
-                    h = server.scene.add_box(name, color=color, dimensions=tuple(2 * size))
+                    h = server.scene.add_box(name, color=color, dimensions=tuple(2 * size), visible=visible)
                 elif gtype == mujoco.mjtGeom.mjGEOM_SPHERE:
-                    h = server.scene.add_icosphere(name, radius=float(size[0]), color=color)
+                    h = server.scene.add_icosphere(name, radius=float(size[0]), color=color, visible=visible)
                 elif gtype in (mujoco.mjtGeom.mjGEOM_CAPSULE, mujoco.mjtGeom.mjGEOM_CYLINDER):
                     import trimesh
                     if gtype == mujoco.mjtGeom.mjGEOM_CAPSULE:
@@ -273,14 +295,18 @@ def build(ctx) -> None:
                     else:
                         tm = trimesh.creation.cylinder(radius=float(size[0]), height=2 * float(size[1]))
                     h = server.scene.add_mesh_simple(name, np.asarray(tm.vertices, np.float32),
-                                                     np.asarray(tm.faces, np.uint32), color=color)
+                                                     np.asarray(tm.faces, np.uint32), color=color,
+                                                     visible=visible)
                 else:
                     continue
             except Exception:  # noqa: BLE001
                 ctx.log(f"[robot] geom {g} not mirrored:\n{traceback.format_exc()}")
                 continue
             st.robot_nodes[g] = h
-        st.robot_nodes_model_id = id(sess.model)
+        st.robot_nodes_session = sess
+        ctx.log(f"[robot] client mode: {len(st.robot_nodes)} robot geom meshes mirrored in the 3D view")
+
+    def ensure_gizmo() -> None:
         if st.gizmo is None:
             st.gizmo = server.scene.add_transform_controls("/robot/ee_gizmo", scale=0.15,
                                                            line_width=2.0, visible=False)
@@ -302,6 +328,32 @@ def build(ctx) -> None:
                     ik_md.content = f"IK error: {exc}"
                 finally:
                     st.gizmo_user_moving = False
+
+    def set_robot_visible() -> None:
+        vis = bool(show_robot_cb.value)
+        for h in st.robot_nodes.values():
+            try:
+                h.visible = vis
+            except Exception:  # noqa: BLE001
+                pass
+        stream = getattr(ctx, "stream", None)
+        if stream is not None:
+            stream.show_robot = vis
+        ctx.events.publish("display.invalidate")
+
+    show_robot_cb.on_update(lambda _e: set_robot_visible())
+    if getattr(ctx, "stream", None) is not None:
+        ctx.stream.show_robot = bool(show_robot_cb.value)
+
+    def on_display_mode(mode) -> None:
+        sess = st.session
+        if mode == "client" and sess is not None and not sess.closed:
+            ensure_robot_nodes(sess)
+            update_robot_nodes(sess)
+        else:
+            remove_robot_nodes()
+
+    ctx.events.subscribe("display.mode_changed", on_display_mode)
 
     def update_robot_nodes(sess: RobotSession) -> None:
         d = sess.data
@@ -390,8 +442,10 @@ def build(ctx) -> None:
         st.session = sess
         ctx.robot = sess
         apply_joint_ranges(sess)
+        ensure_gizmo()
         ensure_robot_nodes(sess)
-        say(f"sim ready: {len(sess.free_bodies)} free objects, {sess.model.ngeom} geoms")
+        say(f"sim ready: {len(sess.free_bodies)} free objects, {sess.model.ngeom} geoms"
+            + (" (robot composited into the server render stream)" if display_mode() != "client" else ""))
         return sess
 
     def do_reset() -> None:
@@ -605,13 +659,7 @@ def build(ctx) -> None:
                 old.close()
             except Exception:  # noqa: BLE001
                 pass
-        for h in st.robot_nodes.values():
-            try:
-                h.remove()
-            except Exception:  # noqa: BLE001
-                pass
-        st.robot_nodes.clear()
-        st.robot_nodes_model_id = None
+        remove_robot_nodes()
         st.authored.clear()
         refresh_task_options()
         refresh_object_options()

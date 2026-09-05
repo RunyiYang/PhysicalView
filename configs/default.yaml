@@ -73,7 +73,18 @@ policy_server:
 
 viewer:
   port: 8080
-  max_splats_background: 2500000
-  max_splats_object: 200000
+  # Scene-tab display mode. "server": the GPU renders the browser camera's view with gsplat
+  # and streams JPEG frames as the viewer background, so the browser holds NO gaussian data
+  # (fixes laptop out-of-memory). "client": capped splat arrays are shipped to WebGL (old
+  # behaviour, high browser memory). Switchable at runtime in the Scene tab.
+  display_mode: server
+  stream:
+    max_width: 1280        # frame width cap (720p); the Scene tab offers 720p / 1080p / native
+    jpeg_quality: 80       # Scene tab slider 50-95
+    max_fps: 15
+    moving_scale: 0.5      # render scale while the camera moves; one full-res frame when it settles
+  # client-mode caps (browser memory); irrelevant in server mode
+  max_splats_background: 400000
+  max_splats_object: 40000
   render_wh: [640, 360]
   control_hz: 15

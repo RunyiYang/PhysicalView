@@ -80,6 +80,8 @@ class Context:
         self.renderer = None         # render.Renderer | None (GPU)
         self.robot = None            # robot.RobotSession | None
         self.selection = Selection()
+        self.display_mode = getattr(config, "display_mode", "server")   # server | client (scene panel keeps it current)
+        self.stream = None           # streaming.ServerRenderStream (owned by the scene panel)
         self.panel_status: dict[str, str] = {}   # tab -> built | placeholder | failed: <err>
         self._status_handle = None
         self._log_lines: list[str] = []
@@ -184,6 +186,11 @@ class StudioApp:
 
     def shutdown(self) -> None:
         try:
+            if self.ctx.stream is not None:
+                try:
+                    self.ctx.stream.stop()
+                except Exception:  # noqa: BLE001
+                    log.debug("stream stop failed", exc_info=True)
             if self.ctx.robot is not None:
                 self.ctx.robot.close()
         finally:

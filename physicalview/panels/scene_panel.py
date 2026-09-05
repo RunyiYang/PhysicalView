@@ -1,28 +1,48 @@
 """Scene tab — see docs/ARCHITECTURE.md for the required controls.
 
-CONTRACT: build(ctx) creates the tab's GUI and wires events. Implemented by the
-owning agent; app.py shows a placeholder while this raises NotImplementedError.
+CONTRACT: build(ctx) creates the tab's GUI and wires events.
+
+Display modes ("Display" dropdown at the top; default from config ``viewer.display_mode``):
+  * **Server render (JPEG stream, recommended)** — ``physicalview.streaming.
+    ServerRenderStream`` renders the browser camera's view on the GPU (gsplat) and streams
+    JPEG frames as the viewer background: the browser holds NO Gaussian data. The scene
+    graph only carries lightweight helpers: a small frame per accepted object
+    (``/helpers/obj_XX``, re-posed on gizmo drags and robot.tick), the highlight AABB, the
+    transform gizmo, the selected camera's frustum (``/helpers/camera``) and the optional
+    mesh / collision layers. "JPEG quality" (50-95) and "stream resolution"
+    (720p/1080p/native) publish ``display.invalidate``.
+  * **Client splats (WebGL, high memory)** — the previous behaviour: splat arrays capped
+    by ``viewer.max_splats_background`` / ``max_splats_object`` are uploaded as
+    ``/background`` and ``/objects/obj_XX`` gaussian nodes.
+  Switching at runtime tears the other mode down (splat nodes removed / background image
+  cleared) and publishes ``display.mode_changed`` ("server" | "client"); the mode is
+  mirrored on ``ctx.display_mode`` and the stream on ``ctx.stream``. Without a GPU the
+  panel falls back to client mode (the stream needs the CUDA renderer).
 
 Controls: result-set dropdown (+ refresh) and Load; layer checkboxes (raw background,
 clean background, scene mesh, object splats, object meshes, collision parts); object table
 + object dropdown that highlights the object's discovery AABB; "Select object" ->
 ctx.set_selection; per-object transform gizmo whose drags re-pose the object's nodes and
 record ``ctx.scene.edited_poses[obj_id]`` (4x4, scale folded in) for other panels; camera
-dropdown + "Snap viewer camera"; "Photoreal snapshot" through ctx.renderer.
+dropdown + "Snap viewer camera"; "Photoreal snapshot" (exactly what the stream shows,
+robot included, saved as PNG).
 
-Scene graph: /background (gaussian splats), /objects/obj_XX (canonical gaussians scaled
-by s, node pose = R,t of aligned T), /object_meshes/obj_XX, /collision/obj_XX/part_i,
+Scene graph: /background (gaussian splats, client mode), /objects/obj_XX (canonical
+gaussians scaled by s, node pose = R,t of aligned T; client mode), /helpers/obj_XX (server
+mode frames), /helpers/camera, /object_meshes/obj_XX, /collision/obj_XX/part_i,
 /scene_mesh, /highlight, /gizmo/obj_XX.
 
 Events: subscribes to scene.objects_changed (reload + refresh), robot.tick (re-pose the
-object splats with splats.frame_transform from body_poses / reset_poses) and
-selection.changed (highlight). Loading runs in a daemon thread; the viser thread is never
-blocked.
+object nodes with splats.frame_transform from body_poses / reset_poses), selection.changed
+(highlight) and inpaint.version_selected (swap the clean background). Loading runs in a
+daemon thread; the viser thread is never blocked. Every scene.add_* on a callback path
+replaces the previous handle, so reloads / objects_changed / ticks never accumulate nodes.
 """
 from __future__ import annotations
 
 import logging
 import threading
+import time
 import traceback
 from pathlib import Path
 
@@ -31,30 +51,20 @@ import numpy as np
 from physicalview import scene_state as S
 from physicalview import splats as SP
 from physicalview.app import Selection
+from physicalview.streaming import RESOLUTION_CHOICES, ServerRenderStream, camera_state, stream_size
 
 log = logging.getLogger("studio.scene_panel")
 
 _MAX_MESH_FACES = 400_000
 _HIGHLIGHT_RGB = (255, 200, 0)
+_FRUSTUM_RGB = (80, 160, 255)
+DISPLAY_SERVER = "Server render (JPEG stream, recommended)"
+DISPLAY_CLIENT = "Client splats (WebGL, high memory)"
+_MODE_LABEL = {"server": DISPLAY_SERVER, "client": DISPLAY_CLIENT}
+_LABEL_MODE = {v: k for k, v in _MODE_LABEL.items()}
+_RESOLUTIONS = tuple(RESOLUTION_CHOICES)
 
-
-def _rot_to_wxyz(R: np.ndarray) -> np.ndarray:
-    """Rotation matrix -> unit quaternion wxyz (Shepperd's method; no utils3d needed)."""
-    R = np.asarray(R, dtype=np.float64)
-    t = np.trace(R)
-    if t > 0:
-        s = np.sqrt(t + 1.0) * 2
-        q = np.array([0.25 * s, (R[2, 1] - R[1, 2]) / s, (R[0, 2] - R[2, 0]) / s, (R[1, 0] - R[0, 1]) / s])
-    elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
-        s = np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2]) * 2
-        q = np.array([(R[2, 1] - R[1, 2]) / s, 0.25 * s, (R[0, 1] + R[1, 0]) / s, (R[0, 2] + R[2, 0]) / s])
-    elif R[1, 1] > R[2, 2]:
-        s = np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2]) * 2
-        q = np.array([(R[0, 2] - R[2, 0]) / s, (R[0, 1] + R[1, 0]) / s, 0.25 * s, (R[1, 2] + R[2, 1]) / s])
-    else:
-        s = np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1]) * 2
-        q = np.array([(R[1, 0] - R[0, 1]) / s, (R[0, 2] + R[2, 0]) / s, (R[1, 2] + R[2, 1]) / s, 0.25 * s])
-    return q / (np.linalg.norm(q) + 1e-12)
+_rot_to_wxyz = SP.matrix_to_quat_wxyz   # old private name, kept for callers
 
 
 def _aabb_segments(lo: np.ndarray, hi: np.ndarray) -> np.ndarray:
@@ -108,6 +118,13 @@ def _decimated(mesh, max_faces: int = _MAX_MESH_FACES):
         return mesh
 
 
+def _resolution_label(max_width) -> str:
+    for label, w in RESOLUTION_CHOICES.items():
+        if w == max_width:
+            return label
+    return "native" if not max_width else "720p"
+
+
 class _ScenePanel:
     def __init__(self, ctx) -> None:
         self.ctx = ctx
@@ -116,31 +133,55 @@ class _ScenePanel:
         self.cache = SP.SplatCache(max_total=max(6_000_000, 2 * ctx.config.max_splats_background))
         self.result_sets: dict[str, S.ResultSet] = {}
         self.state: S.SceneState | None = None
-        self.nodes: dict[str, dict] = {}       # obj_id -> {"splat": h, "mesh": h|None, "collision": [h]}
+        self.nodes: dict[str, dict] = {}       # obj_id -> {"splat": h, "frame": h, "mesh": h|None, "collision": [h]}
         self.bg_handle = None
         self.mesh_handle = None
         self.highlight = None
         self.gizmo = None
         self.gizmo_obj: str | None = None
+        self.frustum = None
         self.snapshot_img = None
         self.busy = threading.Lock()
+        self._syncing = False                 # programmatic GUI writes (viser fires callbacks)
+        self._clean_bg_path: Path | None = None
+        wanted = getattr(ctx, "display_mode", None) or getattr(self.cfg, "display_mode", "server")
+        if wanted == "server" and not ctx.gpu.present:
+            ctx.log("display: no GPU on this node -> client splats (server render needs the CUDA renderer)")
+            wanted = "client"
+        self.mode = wanted
+        ctx.display_mode = self.mode
+        self.stream = ServerRenderStream(ctx, lambda: ctx.renderer, lambda: ctx.robot, self.cfg)
+        self.stream.on_frame = self._on_stream_stats
+        ctx.stream = self.stream
         self._build_gui()
         ctx.events.subscribe("scene.objects_changed", self._on_objects_changed)
         ctx.events.subscribe("robot.tick", self._on_robot_tick)
         ctx.events.subscribe("selection.changed", self._on_selection_changed)
+        ctx.events.subscribe("inpaint.version_selected", self._on_inpaint_version)
+        ctx.log(f"display mode: {self.mode} ({'GPU render -> JPEG stream, no splat data in the browser' if self.mode == 'server' else 'WebGL splats in the browser'})")
 
     # ------------------------------------------------------------------ GUI ----
     def _build_gui(self) -> None:
         gui = self.server.gui
+        cfg = self.cfg
         self.result_sets = {r.name: r for r in self._discover()}
         names = tuple(self.result_sets) or ("<none>",)
+        with gui.add_folder("Display"):
+            self.dd_display = gui.add_dropdown(
+                "mode", (DISPLAY_SERVER, DISPLAY_CLIENT), initial_value=_MODE_LABEL[self.mode],
+                hint="server: the GPU renders and the browser shows a JPEG stream (no splat data in the browser)")
+            self.sl_quality = gui.add_slider("JPEG quality", 50, 95, 1, int(np.clip(cfg.stream.jpeg_quality, 50, 95)))
+            self.dd_res = gui.add_dropdown("stream resolution", _RESOLUTIONS,
+                                           initial_value=_resolution_label(cfg.stream.max_width))
+            self.md_display = gui.add_markdown(self._display_note())
         with gui.add_folder("Result set"):
             self.dd_set = gui.add_dropdown("result set", names, initial_value=names[0])
             self.md_set = gui.add_markdown(self._describe(names[0]))
             self.btn_refresh = gui.add_button("Refresh list")
             self.btn_load = gui.add_button("Load scene")
         with gui.add_folder("Layers"):
-            self.cb_bg = gui.add_checkbox("background splat", True)
+            self.cb_bg = gui.add_checkbox("background splat", True,
+                                          hint="client mode only; the server render always shows the background")
             self.cb_clean = gui.add_checkbox("clean (inpainted) background", False)
             self.cb_mesh = gui.add_checkbox("scene mesh", False)
             self.cb_obj_splats = gui.add_checkbox("object splats", True)
@@ -158,19 +199,23 @@ class _ScenePanel:
             self.btn_photo = gui.add_button("Photoreal snapshot")
             self.md_photo = gui.add_markdown("")
 
+        self.dd_display.on_update(lambda _: self._on_display_dropdown())
+        self.sl_quality.on_update(lambda _: self._set_quality())
+        self.dd_res.on_update(lambda _: self._set_resolution())
         self.dd_set.on_update(lambda _: setattr(self.md_set, "content", self._describe(self.dd_set.value)))
         self.btn_refresh.on_click(lambda _: self._refresh_list())
         self.btn_load.on_click(lambda _: self._start_load(self.dd_set.value))
         self.cb_bg.on_update(lambda _: self._set_visible(self.bg_handle, self.cb_bg.value))
-        self.cb_clean.on_update(lambda _: self._run_bg(self._swap_background))
+        self.cb_clean.on_update(lambda _: None if self._syncing else self._run_bg(self._swap_background))
         self.cb_mesh.on_update(lambda _: self._run_bg(self._toggle_scene_mesh))
-        self.cb_obj_splats.on_update(lambda _: self._set_layer("splat", self.cb_obj_splats.value))
+        self.cb_obj_splats.on_update(lambda _: self._on_obj_splats())
         self.cb_obj_meshes.on_update(lambda _: self._run_bg(self._toggle_object_meshes))
         self.cb_collision.on_update(lambda _: self._run_bg(self._toggle_collision))
         self.dd_obj.on_update(lambda _: self._highlight(self.dd_obj.value))
         self.btn_select.on_click(lambda _: self._select_current())
         self.cb_gizmo.on_update(lambda _: self._toggle_gizmo())
         self.btn_reset_poses.on_click(lambda _: self._reset_edited_poses())
+        self.dd_cam.on_update(lambda _: self._show_frustum(self.dd_cam.value))
         self.btn_snap_cam.on_click(lambda _: self._snap_camera())
         self.btn_photo.on_click(lambda _: self._run_bg(self._photoreal_snapshot))
 
@@ -208,6 +253,16 @@ class _ScenePanel:
                 self.ctx.log(f"scene panel: {fn.__name__} failed:\n{traceback.format_exc()}")
         threading.Thread(target=run, daemon=True).start()
 
+    def _set_value(self, handle, value) -> None:
+        """Write a GUI value without re-entering our own callbacks."""
+        self._syncing = True
+        try:
+            handle.value = value
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            self._syncing = False
+
     @staticmethod
     def _set_visible(handle, visible: bool) -> None:
         if handle is not None:
@@ -225,6 +280,81 @@ class _ScenePanel:
                 h.remove()
             except Exception:  # noqa: BLE001
                 pass
+
+    # ------------------------------------------------------------ display mode ----
+    def _display_note(self, stats: dict | None = None) -> str:
+        cfg = self.cfg
+        if self.mode == "server":
+            s = self.stream.settings
+            res = self.dd_res.value if hasattr(self, "dd_res") else _resolution_label(s.max_width)
+            txt = (f"**server render** — GPU gsplat → JPEG q{s.jpeg_quality} ≤ {s.max_fps:g} fps ({res}); "
+                   f"the browser holds 0 gaussians")
+            if stats:
+                parts = [f"client {cid}: {v['wh'][0]}×{v['wh'][1]} · {v['fps']} fps · {v['ms']} ms/frame"
+                         for cid, v in stats.items() if v.get("wh")]
+                if parts:
+                    txt += "  \n" + " · ".join(parts)
+            return txt
+        return (f"**client splats** — WebGL in the browser; caps {cfg.max_splats_background:,} background / "
+                f"{cfg.max_splats_object:,} per-object gaussians (browser memory)")
+
+    def _on_stream_stats(self, stats: dict) -> None:
+        try:
+            self.md_display.content = self._display_note(stats)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _on_display_dropdown(self) -> None:
+        if self._syncing:
+            return
+        self._run_bg(self._set_display_mode, _LABEL_MODE.get(self.dd_display.value, "client"))
+
+    def _set_display_mode(self, mode: str) -> None:
+        if mode == self.mode:
+            return
+        if mode == "server" and not self.ctx.gpu.present:
+            self.ctx.set_status("server render needs a GPU node (CUDA renderer) — staying on client splats")
+            self._set_value(self.dd_display, DISPLAY_CLIENT)
+            return
+        cfg = self.cfg
+        with self.busy:                      # never while a load is running
+            self.mode = mode
+            self.ctx.display_mode = mode
+            st = self.state
+            if mode == "server":
+                self._remove_nodes(("splat",))
+                self._remove(self.bg_handle)
+                self.bg_handle = None
+                n = self._add_helper_frames() if st is not None else 0
+                if st is not None:
+                    self.stream.start()
+                self.ctx.log(f"display mode: server render — splat nodes removed, 0 gaussians in the browser "
+                             f"({n} helper frames)")
+            else:
+                self.stream.stop()
+                self._remove_nodes(("frame",))
+                n = 0
+                if st is not None:
+                    self._add_background()
+                    for obj_id, rec in sorted(st.objects.items()):
+                        if rec.accepted and rec.T_world is not None and self._add_object_splat(obj_id, rec):
+                            n += 1
+                self.ctx.log(f"display mode: client splats — /background + {n} object splat nodes uploaded "
+                             f"(caps {cfg.max_splats_background:,}/{cfg.max_splats_object:,})")
+        self.ctx.events.publish("display.mode_changed", mode)
+        self.ctx.events.publish("display.invalidate")
+        self.md_display.content = self._display_note()
+        self.ctx.set_status(f"display: {mode} mode")
+
+    def _set_quality(self) -> None:
+        self.stream.jpeg_quality = int(self.sl_quality.value)
+        self.ctx.events.publish("display.invalidate")
+        self.md_display.content = self._display_note()
+
+    def _set_resolution(self) -> None:
+        self.stream.max_width = RESOLUTION_CHOICES.get(self.dd_res.value, self.cfg.stream.max_width)
+        self.ctx.events.publish("display.invalidate")
+        self.md_display.content = self._display_note()
 
     # ------------------------------------------------------------- loading ----
     def _start_load(self, name: str) -> None:
@@ -252,37 +382,49 @@ class _ScenePanel:
         self._remove(self.mesh_handle)
         self._remove(self.highlight)
         self._remove(self.gizmo)
+        self._remove(self.frustum)
         for n in self.nodes.values():
-            self._remove(n.get("splat"))
-            self._remove(n.get("mesh"))
-            self._remove(n.get("collision"))
-        self.bg_handle = self.mesh_handle = self.highlight = self.gizmo = None
+            for kind in ("splat", "frame", "mesh", "collision"):
+                self._remove(n.get(kind))
+        self.bg_handle = self.mesh_handle = self.highlight = self.gizmo = self.frustum = None
         self.gizmo_obj = None
         self.nodes = {}
+        self.stream.clear_background()
 
     def _load(self, rs: S.ResultSet) -> None:
         ctx = self.ctx
+        cfg = self.cfg
         ctx.set_status(f"loading {rs.name}: cameras + splats …")
-        state = S.load_scene(self.cfg, rs, device="cpu", load_mesh=False)
+        state = S.load_scene(cfg, rs, device="cpu", load_mesh=False)
         if ctx.renderer is not None:
             ctx.renderer = None
         self._clear_scene()
         self.state = state
+        clean_path = Path(rs.out_dir) / "inpaint" / "clean_background.ply"
+        self._clean_bg_path = clean_path if state.clean_bg_gs is not None else None
+        if state.clean_bg_gs is None and self.cb_clean.value:
+            self._set_value(self.cb_clean, False)
         self.cb_clean.disabled = state.clean_bg_gs is None
-        if state.clean_bg_gs is None:
-            self.cb_clean.value = False
-        ctx.set_status(f"{rs.name}: uploading background splat …")
-        self._add_background()
         n = 0
-        for obj_id, rec in sorted(state.objects.items()):
-            if not rec.accepted or rec.T_world is None:
-                continue
-            ctx.set_status(f"{rs.name}: object splats {obj_id} …")
-            if self._add_object_splat(obj_id, rec):
-                n += 1
+        if self.mode == "client":
+            ctx.set_status(f"{rs.name}: uploading background splat …")
+            self._add_background()
+            for obj_id, rec in sorted(state.objects.items()):
+                if not rec.accepted or rec.T_world is None:
+                    continue
+                ctx.set_status(f"{rs.name}: object splats {obj_id} …")
+                if self._add_object_splat(obj_id, rec):
+                    n += 1
+            ctx.log(f"display mode: client splats — /background + {n} object splat nodes uploaded "
+                    f"(caps {cfg.max_splats_background:,}/{cfg.max_splats_object:,})")
+        else:
+            n = self._add_helper_frames()
+            ctx.log(f"display mode: server render — 0 gaussian splat nodes created ({n} helper frames); "
+                    "frames are streamed as JPEG background images")
         self._refresh_objects_gui()
         self.dd_cam.options = tuple(sorted(state.cameras)) or ("<none>",)
         self.dd_cam.value = self.dd_cam.options[0]
+        self._show_frustum(self.dd_cam.value)
         if ctx.gpu.present and (state.splat_gs is not None or state.clean_bg_gs is not None):
             ctx.set_status(f"{rs.name}: starting CUDA renderer …")
             try:
@@ -294,14 +436,20 @@ class _ScenePanel:
             except Exception as exc:  # noqa: BLE001
                 ctx.log(f"photoreal renderer failed: {exc}")
         ctx.set_scene(state)
+        if self.mode == "server":
+            if ctx.renderer is None:
+                ctx.log("server render idle: no CUDA renderer for this scene — switch Display to client splats")
+            self.stream.start()
         if self.cb_mesh.value:
             self._run_bg(self._toggle_scene_mesh)
         if self.cb_obj_meshes.value:
             self._run_bg(self._toggle_object_meshes)
         if self.cb_collision.value:
             self._run_bg(self._toggle_collision)
-        ctx.set_status(f"loaded {rs.name}: {n} object splats, {len(state.cameras)} cameras"
-                       + (", photoreal on" if ctx.renderer is not None else ""))
+        ctx.set_status(f"loaded {rs.name}: {n} {'object splats' if self.mode == 'client' else 'object frames'}, "
+                       f"{len(state.cameras)} cameras"
+                       + (", photoreal on" if ctx.renderer is not None else "")
+                       + (" · server render stream" if self.mode == "server" else ""))
 
     # ---------------------------------------------------------- scene nodes ----
     def _bg_arrays(self, clean: bool) -> SP.SplatArrays | None:
@@ -315,6 +463,7 @@ class _ScenePanel:
         return self.cache.get(key, lambda: SP.to_viser_arrays(gs, self.cfg.max_splats_background))
 
     def _add_background(self) -> None:
+        """Client mode: (re)upload the capped background splat; replaces the old node."""
         use_clean = self.cb_clean.value and self.state is not None and self.state.clean_bg_gs is not None
         arr = self._bg_arrays(use_clean) or self._bg_arrays(False)
         self._remove(self.bg_handle)
@@ -329,12 +478,14 @@ class _ScenePanel:
     def _swap_background(self) -> None:
         if self.state is None:
             return
-        self._add_background()
+        if self.mode == "client":
+            self._add_background()
         if self.ctx.renderer is not None:
             try:
                 self.ctx.renderer.set_background("clean" if self.cb_clean.value else "raw")
             except Exception as exc:  # noqa: BLE001
                 self.ctx.log(f"renderer background switch failed: {exc}")
+        self.ctx.events.publish("display.invalidate")
         self.ctx.set_status("clean background" if self.cb_clean.value else "raw background")
 
     def _object_pose(self, obj_id: str) -> tuple[float, np.ndarray, np.ndarray] | None:
@@ -348,6 +499,7 @@ class _ScenePanel:
         return SP.decompose_similarity(T)
 
     def _add_object_splat(self, obj_id: str, rec: S.ObjectRecord) -> bool:
+        """Client mode: one capped splat node per object; an existing node is replaced."""
         pose = self._object_pose(obj_id)
         if pose is None:
             return False
@@ -360,12 +512,53 @@ class _ScenePanel:
         src = S.canonical_gs_path(rec)[0]
         key = f"{self.state.result_set.name}:{obj_id}:{src}:{s:.6f}"
         arr = self.cache.get(key, lambda: SP.to_viser_arrays(gs, self.cfg.max_splats_object, extra_scale=s))
-        h = self.server.scene.add_gaussian_splats(
+        n = self.nodes.setdefault(obj_id, {})
+        self._remove(n.get("splat"))
+        n["splat"] = self.server.scene.add_gaussian_splats(
             f"/objects/{obj_id}", centers=arr.centers, covariances=arr.covariances, rgbs=arr.rgbs,
-            opacities=arr.opacities, position=tuple(t), wxyz=tuple(_rot_to_wxyz(R)),
+            opacities=arr.opacities, position=tuple(t), wxyz=tuple(SP.matrix_to_quat_wxyz(R)),
             visible=self.cb_obj_splats.value)
-        self.nodes.setdefault(obj_id, {})["splat"] = h
         return True
+
+    def _add_object_frame(self, obj_id: str, rec: S.ObjectRecord) -> bool:
+        """Server mode: a small axes frame marks the object pose (no gaussians)."""
+        pose = self._object_pose(obj_id)
+        if pose is None:
+            return False
+        s, R, t = pose
+        dims = rec.world_dims or [0.2, 0.2, 0.2]
+        L = float(np.clip(0.5 * max(dims), 0.05, 0.3))
+        n = self.nodes.setdefault(obj_id, {})
+        self._remove(n.get("frame"))
+        n["frame"] = None
+        try:
+            n["frame"] = self.server.scene.add_frame(
+                f"/helpers/{obj_id}", axes_length=L, axes_radius=L / 25.0, origin_radius=L / 10.0,
+                position=tuple(t), wxyz=tuple(SP.matrix_to_quat_wxyz(R)), visible=self.cb_obj_splats.value)
+        except Exception as exc:  # noqa: BLE001
+            self.ctx.log(f"{obj_id} frame: {exc}")
+            return False
+        return True
+
+    def _add_object_visual(self, obj_id: str, rec: S.ObjectRecord) -> bool:
+        if self.mode == "client":
+            return self._add_object_splat(obj_id, rec)
+        return self._add_object_frame(obj_id, rec)
+
+    def _add_helper_frames(self) -> int:
+        st = self.state
+        if st is None:
+            return 0
+        n = 0
+        for obj_id, rec in sorted(st.objects.items()):
+            if rec.accepted and rec.T_world is not None and self._add_object_frame(obj_id, rec):
+                n += 1
+        return n
+
+    def _remove_nodes(self, kinds: tuple[str, ...]) -> None:
+        for n in self.nodes.values():
+            for kind in kinds:
+                self._remove(n.pop(kind, None))
 
     def _set_layer(self, layer: str, visible: bool) -> None:
         for n in self.nodes.values():
@@ -376,11 +569,18 @@ class _ScenePanel:
             else:
                 self._set_visible(h, visible)
 
+    def _on_obj_splats(self) -> None:
+        vis = bool(self.cb_obj_splats.value)
+        self._set_layer("splat", vis)
+        self._set_layer("frame", vis)
+        self.stream.show_objects = vis
+        self.ctx.events.publish("display.invalidate")
+
     def _pose_nodes(self, obj_id: str, T: np.ndarray) -> None:
         s, R, t = SP.decompose_similarity(T)
-        q = tuple(_rot_to_wxyz(R))
+        q = tuple(SP.matrix_to_quat_wxyz(R))
         n = self.nodes.get(obj_id, {})
-        for h in [n.get("splat"), n.get("mesh")] + list(n.get("collision") or []):
+        for h in [n.get("splat"), n.get("frame"), n.get("mesh")] + list(n.get("collision") or []):
             if h is None:
                 continue
             try:
@@ -432,7 +632,7 @@ class _ScenePanel:
             try:
                 tm = trimesh.load(str(mp), process=False, force="mesh")
                 n["mesh"] = self.server.scene.add_mesh_trimesh(
-                    f"/object_meshes/{obj_id}", tm, scale=s, position=tuple(t), wxyz=tuple(_rot_to_wxyz(R)))
+                    f"/object_meshes/{obj_id}", tm, scale=s, position=tuple(t), wxyz=tuple(SP.matrix_to_quat_wxyz(R)))
             except Exception as exc:  # noqa: BLE001
                 self.ctx.log(f"{obj_id} mesh: {exc}")
 
@@ -455,7 +655,7 @@ class _ScenePanel:
             if pose is None or not rec.accepted or rec.collision_parts == 0:
                 continue
             s, R, t = pose
-            q = tuple(_rot_to_wxyz(R))
+            q = tuple(SP.matrix_to_quat_wxyz(R))
             handles = []
             for part in sorted((rec.dir / "collision").glob("part_*.obj")):
                 try:
@@ -539,7 +739,7 @@ class _ScenePanel:
         try:
             self.gizmo = self.server.scene.add_transform_controls(
                 f"/gizmo/{obj_id}", scale=float(max(0.15, 1.6 * max(dims))), line_width=1.5,
-                position=tuple(t), wxyz=tuple(_rot_to_wxyz(R)))
+                position=tuple(t), wxyz=tuple(SP.matrix_to_quat_wxyz(R)))
         except Exception as exc:  # noqa: BLE001
             self.ctx.log(f"gizmo failed: {exc}")
             return
@@ -555,6 +755,7 @@ class _ScenePanel:
             T[:3, 3] = np.asarray(tc.position, dtype=np.float64)
             self.state.edited_poses[obj_id] = T
             self._pose_nodes(obj_id, T)
+            self.ctx.events.publish("display.invalidate")      # live in the stream (coalesced)
             if getattr(event, "phase", "end") == "end":
                 self.ctx.events.publish("scene.pose_edited", {"object": obj_id, "T": T})
 
@@ -570,6 +771,7 @@ class _ScenePanel:
                 self._pose_nodes(obj_id, rec.T_world)
         if self.cb_gizmo.value:
             self._toggle_gizmo()
+        self.ctx.events.publish("display.invalidate")
         self.ctx.set_status(f"reset {len(edited)} edited pose(s)")
 
     def _on_objects_changed(self, obj_ids) -> None:
@@ -582,15 +784,14 @@ class _ScenePanel:
             ids = set(changed) | set(obj_ids or [])
             for obj_id in sorted(ids):
                 n = self.nodes.pop(obj_id, {})
-                self._remove(n.get("splat"))
-                self._remove(n.get("mesh"))
-                self._remove(n.get("collision"))
+                for kind in ("splat", "frame", "mesh", "collision"):
+                    self._remove(n.get(kind))
                 for key in list(self.cache._items):  # invalidate per-object arrays
                     if key.startswith(f"{st.result_set.name}:{obj_id}:"):
                         self.cache.pop(key)
                 rec = st.objects.get(obj_id)
                 if rec is not None and rec.accepted:
-                    self._add_object_splat(obj_id, rec)
+                    self._add_object_visual(obj_id, rec)
             if self.ctx.renderer is not None:
                 try:
                     self.ctx.renderer.invalidate(ids)
@@ -601,7 +802,41 @@ class _ScenePanel:
                 self._toggle_object_meshes()
             if self.cb_collision.value:
                 self._toggle_collision()
+            self.ctx.events.publish("display.invalidate")
             self.ctx.set_status(f"objects refreshed: {', '.join(sorted(ids)) or 'none changed'}")
+        self._run_bg(run)
+
+    def _on_inpaint_version(self, path) -> None:
+        """Inpaint tab picked a clean-background version (None = original splat)."""
+        st = self.state
+        if st is None:
+            return
+
+        def run():
+            if path is None:
+                if self.cb_clean.value:
+                    self._set_value(self.cb_clean, False)
+                    self._swap_background()
+                return
+            p = Path(path)
+            if not p.exists():
+                self.ctx.set_status(f"inpaint version missing: {p}")
+                return
+            if st.clean_bg_gs is None or self._clean_bg_path is None or Path(self._clean_bg_path) != p:
+                self.ctx.set_status(f"loading clean background {p.name} …")
+                from agents.core import common as C
+                st.clean_bg_gs = C.load_gaussians(p, device="cpu")
+                self._clean_bg_path = p
+                self.cache.pop(f"{st.result_set.name}:bg:clean")
+                if self.ctx.renderer is not None:
+                    try:
+                        self.ctx.renderer.set_background("clean", force=True)
+                    except Exception as exc:  # noqa: BLE001
+                        self.ctx.log(f"renderer clean background reload failed: {exc}")
+            self.cb_clean.disabled = False
+            if not self.cb_clean.value:
+                self._set_value(self.cb_clean, True)
+            self._swap_background()
         self._run_bg(run)
 
     # ----------------------------------------------------------------- robot ----
@@ -639,6 +874,24 @@ class _ScenePanel:
         except Exception:  # noqa: BLE001
             return []
 
+    def _show_frustum(self, name: str | None) -> None:
+        """Frustum helper for the selected scene camera (replaces the previous one)."""
+        self._remove(self.frustum)
+        self.frustum = None
+        st = self.state
+        if st is None or not name or name not in st.cameras:
+            return
+        c2w = np.linalg.inv(st.cameras[name])
+        fov = (float(2.0 * np.arctan(st.H / (2.0 * st.K[1, 1]))) if (st.K is not None and st.H)
+               else float(np.radians(60.0)))
+        aspect = (st.W / st.H) if (st.W and st.H) else 16.0 / 9.0
+        try:
+            self.frustum = self.server.scene.add_camera_frustum(
+                "/helpers/camera", fov=fov, aspect=aspect, scale=0.15, color=_FRUSTUM_RGB,
+                position=tuple(c2w[:3, 3]), wxyz=tuple(SP.matrix_to_quat_wxyz(c2w[:3, :3])))
+        except Exception as exc:  # noqa: BLE001
+            self.ctx.log(f"camera frustum failed: {exc}")
+
     def _snap_camera(self) -> None:
         st = self.state
         name = self.dd_cam.value
@@ -654,11 +907,12 @@ class _ScenePanel:
             try:
                 cam = client.camera
                 cam.position = tuple(c2w[:3, 3])
-                cam.wxyz = tuple(_rot_to_wxyz(c2w[:3, :3]))
+                cam.wxyz = tuple(SP.matrix_to_quat_wxyz(c2w[:3, :3]))
                 if st.K is not None and st.H:
                     cam.fov = float(2.0 * np.arctan(st.H / (2.0 * st.K[1, 1])))
             except Exception as exc:  # noqa: BLE001
                 self.ctx.log(f"camera snap failed: {exc}")
+        self._show_frustum(name)
         self.ctx.set_selection(Selection(kind=self.ctx.selection.kind, object_ids=list(self.ctx.selection.object_ids),
                                          camera_frame=name))
         self.ctx.set_status(f"viewer camera -> {name}")
@@ -683,20 +937,24 @@ class _ScenePanel:
         if r is None:
             self.md_photo.content = "_photoreal renderer unavailable (needs a GPU node with gsplat)_"
             return
-        cam = self.viewer_camera()
-        if cam is None:
+        clients = self._clients()
+        if not clients:
             self.md_photo.content = "_no browser client connected_"
             return
-        w2c, K, wh = cam
         self.ctx.set_status("rendering photoreal snapshot …")
-        img = r.render(w2c, K, wh)
+        cam = camera_state(clients[0])
+        if cam is not None:   # same path as the stream: objects posed live, robot composited
+            wh = stream_size(cam["image_width"], cam["aspect"], 1920)
+            img = self.stream.render_for_camera(cam["position"], cam["wxyz"], cam["fov"], cam["aspect"], wh)
+        else:
+            w2c, K, wh = self.viewer_camera()
+            img = r.render(w2c, K, wh)
         if self.snapshot_img is None:
             self.snapshot_img = self.server.gui.add_image(img, label="photoreal snapshot", format="jpeg")
         else:
             self.snapshot_img.image = img
         out = Path(self.cfg.studio_out) / "snapshots"
         try:
-            import time
             path = r.save_png(img, out / f"{self.state.result_set.name}_{time.strftime('%Y%m%d_%H%M%S')}.png")
             self.md_photo.content = f"saved `{path}`"
         except Exception as exc:  # noqa: BLE001

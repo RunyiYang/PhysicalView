@@ -12,6 +12,9 @@ CONTRACT (scene/render agent). Pure numpy/torch-CPU; no viser import here.
         cov' = s^2 R cov R^T, centers' = s R c + t) — used to place canonical object
         gaussians at aligned["T"] and to follow MuJoCo body poses each tick.
 
+    matrix_to_quat_wxyz(R) -> wxyz   (Shepperd; inverse of quat_wxyz_to_matrix for viser
+        node poses and camera conversions)
+
     frame_transform(aligned_T, body_pos, body_quat_wxyz, T_at_reset) -> 4x4
         For live physics: an object's canonical gaussians were registered with aligned T
         (canonical -> world at rest). When MuJoCo moves body b from its reset pose
@@ -72,6 +75,25 @@ def quat_wxyz_to_matrix(q: np.ndarray) -> np.ndarray:
     R[..., 2, 1] = 2 * (y * z + w * x)
     R[..., 2, 2] = 1 - 2 * (x * x + y * y)
     return R
+
+
+def matrix_to_quat_wxyz(R: np.ndarray) -> np.ndarray:
+    """Rotation matrix -> unit quaternion wxyz (Shepperd's method; no utils3d needed)."""
+    R = np.asarray(R, dtype=np.float64)
+    t = np.trace(R)
+    if t > 0:
+        s = np.sqrt(t + 1.0) * 2
+        q = np.array([0.25 * s, (R[2, 1] - R[1, 2]) / s, (R[0, 2] - R[2, 0]) / s, (R[1, 0] - R[0, 1]) / s])
+    elif R[0, 0] > R[1, 1] and R[0, 0] > R[2, 2]:
+        s = np.sqrt(1.0 + R[0, 0] - R[1, 1] - R[2, 2]) * 2
+        q = np.array([(R[2, 1] - R[1, 2]) / s, 0.25 * s, (R[0, 1] + R[1, 0]) / s, (R[0, 2] + R[2, 0]) / s])
+    elif R[1, 1] > R[2, 2]:
+        s = np.sqrt(1.0 + R[1, 1] - R[0, 0] - R[2, 2]) * 2
+        q = np.array([(R[0, 2] - R[2, 0]) / s, (R[0, 1] + R[1, 0]) / s, 0.25 * s, (R[1, 2] + R[2, 1]) / s])
+    else:
+        s = np.sqrt(1.0 + R[2, 2] - R[0, 0] - R[1, 1]) * 2
+        q = np.array([(R[1, 0] - R[0, 1]) / s, (R[0, 2] + R[2, 0]) / s, (R[1, 2] + R[2, 1]) / s, 0.25 * s])
+    return q / (np.linalg.norm(q) + 1e-12)
 
 
 def to_viser_arrays(gs: dict, max_splats: int, extra_scale: float = 1.0) -> SplatArrays:

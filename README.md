@@ -62,7 +62,10 @@ Headless end-to-end check (no browser): `source run/env.sh && $STUDIO_PY -m phys
 
 * **Scene** — pick any result set (ScanNet++ factory/auto/full, DROID, phone video, BEHAVIOR),
   layers (raw / clean background, mesh, object splats, collision), object table, selection and
-  gizmos, camera snap, photoreal snapshot.
+  gizmos, camera snap, photoreal snapshot. **Display mode**: *Server render* (default) renders
+  the view on the GPU with gsplat and streams JPEG frames as the viewer background, so the
+  browser holds no splat data (JPEG quality and 720p/1080p/native controls; the robot is
+  composited in); *Client splats* uploads capped splat arrays to WebGL (high browser memory).
 * **Generate** — discovery model (GT segments / SAM3 auto), generation model (TRELLIS,
   ReconViaGen, SAM 3D Objects, evidence-gated hybrid), registration mode (yaw-sweep ICP, signed /
   alternative source-up), per-object generate / register / physics, drop-test report, MJCF export
@@ -74,7 +77,7 @@ Headless end-to-end check (no browser): `source run/env.sh && $STUDIO_PY -m phys
   (pi0.5 DROID, pi0.5 sim-cotrained, scripted); start/check the policy server; raster or
   photoreal-composite observations; run/stop an episode with the grasp·lift·hover·place stage
   bar; 7 joint sliders + gripper; end-effector gizmo driven by damped-least-squares IK; robot
-  geoms live in the 3D view.
+  geoms live in the 3D view (client mode) or are composited into the server render stream.
 * **Jobs** — every stage is a job (local when the node's GPU supports that stage's env,
   otherwise `srun` to a compatible GPU type), live logs, cancel, GPU compatibility matrix.
 
