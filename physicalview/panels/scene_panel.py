@@ -63,6 +63,9 @@ DISPLAY_CLIENT = "Client splats (WebGL, high memory)"
 _MODE_LABEL = {"server": DISPLAY_SERVER, "client": DISPLAY_CLIENT}
 _LABEL_MODE = {v: k for k, v in _MODE_LABEL.items()}
 _RESOLUTIONS = tuple(RESOLUTION_CHOICES)
+_KIND_ALL = "all"
+# Dataset-filter order: robot datasets first (the demo entry points), scans after.
+_KIND_ORDER = ("behavior", "droid", "video", "factory", "auto", "full", "unbuilt", "other")
 
 _rot_to_wxyz = SP.matrix_to_quat_wxyz   # old private name, kept for callers
 
@@ -165,7 +168,11 @@ class _ScenePanel:
         gui = self.server.gui
         cfg = self.cfg
         self.result_sets = {r.name: r for r in self._discover()}
-        names = tuple(self.result_sets) or ("<none>",)
+        # --scene preselects a result set; its kind also preselects the dataset filter.
+        wanted = getattr(self.ctx, "initial_scene", None)
+        self.kind_filter = self.result_sets[wanted].kind if wanted in self.result_sets else _KIND_ALL
+        names = self._visible_names()
+        initial = wanted if wanted in names else names[0]
         with gui.add_folder("Display"):
             self.dd_display = gui.add_dropdown(
                 "mode", (DISPLAY_SERVER, DISPLAY_CLIENT), initial_value=_MODE_LABEL[self.mode],
@@ -175,8 +182,10 @@ class _ScenePanel:
                                            initial_value=_resolution_label(cfg.stream.max_width))
             self.md_display = gui.add_markdown(self._display_note())
         with gui.add_folder("Result set"):
-            self.dd_set = gui.add_dropdown("result set", names, initial_value=names[0])
-            self.md_set = gui.add_markdown(self._describe(names[0]))
+            self.dd_kind = gui.add_dropdown("dataset", self._kind_options(), initial_value=self.kind_filter,
+                                            hint="filter the result-set list by source dataset")
+            self.dd_set = gui.add_dropdown("result set", names, initial_value=initial)
+            self.md_set = gui.add_markdown(self._describe(initial))
             self.btn_refresh = gui.add_button("Refresh list")
             self.btn_load = gui.add_button("Load scene")
         with gui.add_folder("Layers"):
@@ -202,6 +211,7 @@ class _ScenePanel:
         self.dd_display.on_update(lambda _: self._on_display_dropdown())
         self.sl_quality.on_update(lambda _: self._set_quality())
         self.dd_res.on_update(lambda _: self._set_resolution())
+        self.dd_kind.on_update(lambda _: self._on_kind_filter())
         self.dd_set.on_update(lambda _: setattr(self.md_set, "content", self._describe(self.dd_set.value)))
         self.btn_refresh.on_click(lambda _: self._refresh_list())
         self.btn_load.on_click(lambda _: self._start_load(self.dd_set.value))
@@ -236,14 +246,42 @@ class _ScenePanel:
                 + (f" · {', '.join(flags)}" if flags else "")
                 + ("" if rs.splat_ply else " · **no splat**"))
 
-    def _refresh_list(self) -> None:
-        self.result_sets = {r.name: r for r in self._discover()}
-        names = tuple(self.result_sets) or ("<none>",)
+    def _kind_options(self) -> tuple[str, ...]:
+        """"all" plus every kind actually present, in _KIND_ORDER then alphabetically."""
+        kinds = {r.kind for r in self.result_sets.values()}
+        ordered = [k for k in _KIND_ORDER if k in kinds]
+        ordered += sorted(kinds - set(_KIND_ORDER))
+        return (_KIND_ALL,) + tuple(ordered)
+
+    def _visible_names(self) -> tuple[str, ...]:
+        """Result-set names passing the dataset filter, sorted; ("<none>",) when empty."""
+        names = tuple(sorted(n for n, r in self.result_sets.items()
+                             if self.kind_filter == _KIND_ALL or r.kind == self.kind_filter))
+        return names or ("<none>",)
+
+    def _on_kind_filter(self) -> None:
+        self.kind_filter = self.dd_kind.value
+        names = self._visible_names()
         cur = self.dd_set.value
         self.dd_set.options = names
         self.dd_set.value = cur if cur in names else names[0]
         self.md_set.content = self._describe(self.dd_set.value)
-        self.ctx.set_status(f"{len(self.result_sets)} result sets")
+        self.ctx.set_status(f"{len(names)} result sets in `{self.kind_filter}`")
+
+    def _refresh_list(self) -> None:
+        self.result_sets = {r.name: r for r in self._discover()}
+        kinds = self._kind_options()
+        self.dd_kind.options = kinds
+        if self.kind_filter not in kinds:
+            self.kind_filter = _KIND_ALL
+        self.dd_kind.value = self.kind_filter
+        names = self._visible_names()
+        cur = self.dd_set.value
+        self.dd_set.options = names
+        self.dd_set.value = cur if cur in names else names[0]
+        self.md_set.content = self._describe(self.dd_set.value)
+        self.ctx.set_status(f"{len(self.result_sets)} result sets "
+                            f"({len(names)} in `{self.kind_filter}`)")
 
     def _run_bg(self, fn, *args) -> None:
         def run():
@@ -966,3 +1004,11 @@ def build(ctx) -> None:
     import viser  # noqa: F401 - only needed at build time (the GUI lives in ctx.server)
     panel = _ScenePanel(ctx)
     ctx.scene_panel = panel  # handy for tests / other panels (viewer_camera helper)
+    # --scene: load it now so the first browser to connect sees the scene already up.
+    wanted = getattr(ctx, "initial_scene", None)
+    if wanted:
+        if wanted in panel.result_sets:
+            ctx.log(f"--scene {wanted}: loading at startup")
+            panel._start_load(wanted)
+        else:
+            ctx.log(f"--scene {wanted}: no such result set; pick one in the Scene tab")

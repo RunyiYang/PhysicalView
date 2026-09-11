@@ -47,6 +47,7 @@ sbatch --partition=batch --gres=gpu:h200:1 --exclude=msp3-[0-7] run/studio.sbatc
 sbatch --partition=batch --gres=gpu:a100-80g:1 run/studio.sbatch                  # A100
 sbatch --partition=batch --gres=gpu:rtx6000:1 -w gcp-eu1-rtx6000-vz3w run/studio.sbatch
 PORT=8081 sbatch run/studio.sbatch                                                # custom port
+STUDIO_ARGS="--scene droid_iris_mon_apr_17_16_03_25_2023" sbatch run/studio.sbatch  # open on a scene
 tail -f outputs/logs/studio_<jobid>.log
 
 # interactive
@@ -60,7 +61,10 @@ Headless end-to-end check (no browser): `source run/env.sh && $STUDIO_PY -m phys
 
 ## Tabs
 
-* **Scene** — pick any result set (ScanNet++ factory/auto/full, DROID, phone video, BEHAVIOR),
+* **Scene** — pick any result set (ScanNet++ factory/auto/full, DROID, phone video, BEHAVIOR)
+  with the **dataset** filter (`all` / `behavior` / `droid` / `video` / `factory` / ...) narrowing
+  the alphabetically sorted result-set list; `--scene <name>` preselects one and loads it at
+  startup, so the first browser to connect already sees the scene. Then:
   layers (raw / clean background, mesh, object splats, collision), object table, selection and
   gizmos, camera snap, photoreal snapshot. **Display mode**: *Server render* (default) renders
   the view on the GPU with gsplat and streams JPEG frames as the viewer background, so the
