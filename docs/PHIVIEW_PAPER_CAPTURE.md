@@ -18,7 +18,8 @@ in the copies. Original experiment artifacts remain unchanged.
 
 - All original Gaussian parameters remain loaded. Export is lossless PNG at
   2880×1920; this render size does not assert that the source observations have
-  that resolution. No sharpening, generative enhancement, or image replacement.
+  that resolution. Screenshots are saved directly from renders without post-render
+  retouching. Prompted inpainting is an explicit, separately recorded scene operation.
 - Survey the actual rendered object visibility, then move a real camera for
   target framing. Save the chosen pose before actions. Reuse that exact choice
   across prompted construction and final captures.

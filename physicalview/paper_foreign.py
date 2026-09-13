@@ -19,6 +19,11 @@ def main():
     else:
         if not (scene/'dslr/colmap/images.txt').exists():
             run_command([cfg.interpreter('main'),'-m','oracle.capture_generator','extract','--task',row['task'],'--scene-name',sid,'--root',cfg.scannetpp_root,'--episodes',6,'--max-frames',120,'--tasks-config',root/'behavior-tasks.yaml'],{},cfg.repo_root,logs,'wds-extract')
+        calibration=json.loads((scene/'dslr/nerfstudio/transforms_undistorted.json').read_text())
+        scale=calibration['h']/1168.
+        os.environ['SIMANY_MIN_BBOX_PX']=str(max(6,round(48*scale)))
+        os.environ['SIMANY_MIN_MASK_PX']=str(max(9,round(400*scale*scale)))
+        os.environ['SIMANY_MESH_SRC']='derived'
     splat=cfg.splats_root/(sid+'.ply')
     if not splat.exists():
         run_command([cfg.interpreter('gsplat'),'-m','agents.recon.gsplat_train','--scene-dir',scene,'--init-ply',scene/'init_points.ply','--out',splat,'--iters',15000],{},cfg.repo_root,logs,'gaussian-train')
@@ -53,5 +58,8 @@ def main():
     save_json(rows/f'{a.index}.json',{'dataset':a.dataset,'scene':sid,'result_set':sid+'_factory','assets':asset,'objects':metadata,'auto':a.dataset=='behavior','source':row})
     env={'SIMANY_MESH_SRC':'derived'} if a.dataset=='behavior' else {}
     run_command([cfg.interpreter('studio'),'-m','physicalview.paper_campaign','--root',root,'--index',a.index,'--dataset',a.dataset],env,cfg.package_root,logs,'feature-campaign')
+    completion=json.loads((out/'capture-complete.json').read_text())
+    if completion['counts']['captured']!=14:
+        raise RuntimeError('Dataset scene has incomplete features; not a completed 14-feature run')
 
 if __name__=='__main__':main()
