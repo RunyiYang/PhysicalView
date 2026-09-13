@@ -1,0 +1,80 @@
+# PhiView paper image campaign
+
+Requested scope: 10 ScanNet++ scenes, then 10 LIBERO layouts, then 10 BEHAVIOR
+ task-scene configurations. Each dataset has 14 feature groups per scene (the
+ second `f` in the request is named `f2_clean_all`): 420 requested scene/feature
+ groups in total. This is qualitative demo evidence, not a benchmark evaluation.
+
+Output root: `/group/worldcept/code/PhysicalView/outputs/paper-capture-20260913`.
+`roster.json`, `libero-roster.json`, and `behavior-roster.json` identify sources.
+
+ScanNet++ roster: `c50d2d1d42`, `45b0dac5e3`, `825d228aec`, `7b6477cb95`,
+`578511c8a9`, `27dd4da69e`, `38d58a7a31`, `f9f95681fd`, `3e8bba0176`, `3864514494`.
+Existing object/inpaint/simulation assets were copied to isolated campaign folders.
+Six existing MJCF exports passed compilation after relative asset paths were repaired
+in the copies. Original experiment artifacts remain unchanged.
+
+## Capture and evidence
+
+- All original Gaussian parameters remain loaded. Export is lossless PNG at
+  2880×1920; this render size does not assert that the source observations have
+  that resolution. No sharpening, generative enhancement, or image replacement.
+- Survey the actual rendered object visibility, then move a real camera for
+  target framing. Save the chosen pose before actions. Reuse that exact choice
+  across prompted construction and final captures.
+- Each PNG has a JSON sidecar with camera matrices/intrinsics, source resolution,
+  object selection, active mass/inertia/friction, qpos/qvel, quality diagnostics,
+  selected pixel bounds, and SHA-256. Full-scene context and target details are
+  separate renders. Fall/friction/throw/robot have state traces and footage.
+- Re-run Qwen-Image-Edit-2511 for clean backgrounds and a selected-object prompt,
+  then fit replacement Gaussians for 1,000 iterations. Guards reject cached edits
+  and non-Qwen fallback. Prompt text, per-view outcomes and model receipts persist.
+- Fresh SAM3 has its own source image, binary masks and scores. It is single-view
+  image inference using scene class prompts. Existing Gaussian object proposals
+  include GT-assisted metadata; the highlight images do not establish exhaustive
+  GT-free discovery. Keep these two evidence types distinct in paper captions.
+- `features.json` separates captured, failed, and missing features. Captured only
+  establishes execution and its stated checks. Publication quality is reviewed
+  separately. Failed and interrupted attempts must not be counted as completed.
+- SVG panels embed unchanged PNGs and keep titles/parameter text editable.
+  `python -m physicalview.paper_pack --root OUTPUT_ROOT` creates `gallery.html`,
+  `coverage.csv`, `coverage.json`, and per-feature `panel.svg` files.
+
+## Dataset adapters
+
+LIBERO: 10 distinct native layouts; original HDF5 `demo_0` state and XML retained.
+All referenced meshes/textures resolved and all 10 geometry preflights passed.
+The adapter freezes articulated fixtures at the recorded state and omits the native
+robot before capture, allowing PhiView to add its own arm. Remaining geom positions
+are checked against the recorded native model. It renders 80 posed RGB-D views at
+1536×1024, then runs 15,000-step Gaussian training and the construction stages.
+This is native simulator, GT-pose/GT-mesh assisted evidence; not real-world capture.
+GPU rendering/training is a separate gate from the successful CPU preflight.
+
+BEHAVIOR: 10 WDS task-scene sources indexed with explicit shard hints. Native RGB
+observations are 320×180; previous 1280×720 exports are upscaled. The adapter uses
+posed observations, derived geometry, SAM3 discovery, and generated assets. It does
+not manufacture high-resolution detail. Distinct task IDs are not proof of ten
+independent physical environments. These limitations must survive figure selection.
+
+The requested order is ScanNet++ → LIBERO → BEHAVIOR. Start a bounded first scene
+for each new adapter before releasing its remaining scenes; a queued or prepared
+adapter is not completed evidence.
+
+## Initial attempts
+
+The initial H200 pilot (893906) completed 13 non-prompt features but was rejected
+for publication: stacked floor boxes were a weak interaction target and inherited
+clean backgrounds had visible remnants. Results remain under `pilot/`.
+
+The first campaign exposed virtual-environment Python symlink resolution: resolving
+`bin/python` to its base executable lost installed packages. The config loader now
+resolves the parent directory while preserving the executable path; regression test
+added. Original attempt logs are retained; retries write histories under `attempts/`.
+
+The early `previews/38d58a7a31` run inherited four Slurm tasks and shared output paths;
+its review record marks it invalid. The single-task preview was interrupted when its
+parent allocation completed. Neither is included in the official scene/feature count.
+
+Current scheduler and completion state must be read from Slurm and the per-scene
+`campaign-status.json` files; job submission alone does not establish completion.

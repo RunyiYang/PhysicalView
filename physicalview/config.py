@@ -110,6 +110,15 @@ def _abs(root: Path, value: str | os.PathLike) -> Path:
     return p if p.is_absolute() else (root / p).resolve()
 
 
+def _interpreter_path(root: Path, value: str | os.PathLike) -> Path:
+    # Resolving bin/python itself follows a venv symlink into the base Python,
+    # losing pyvenv.cfg and every package installed in that environment.
+    p = Path(os.path.expandvars(str(value))).expanduser()
+    if not p.is_absolute():
+        p = root / p
+    return p.parent.resolve() / p.name
+
+
 def _choices(items: list[dict] | None) -> list[ModelChoice]:
     out = []
     for it in items or []:
@@ -150,7 +159,7 @@ def load_config(path: str | os.PathLike | None = None,
         studio_out=_abs(root, raw.get("studio_out", "outputs/studio")),
         scannetpp_root=_abs(root, raw.get("scannetpp_root", "/data/ScanNetpp")),
         splats_root=_abs(root, raw.get("splats_root", "/data/ScanNetppv2_gsplat/splats")),
-        interpreters={k: _abs(root, v) for k, v in (raw.get("interpreters") or {}).items()},
+        interpreters={k: _interpreter_path(root, v) for k, v in (raw.get("interpreters") or {}).items()},
         env_arch_support={k: tuple(str(a) for a in v)
                           for k, v in (raw.get("env_arch_support") or {}).items()},
         gpu_targets=targets,
