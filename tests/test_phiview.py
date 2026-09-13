@@ -23,6 +23,13 @@ def test_camera_diagonals_pitch_and_stall_bound():
     assert np.allclose(K[:2, 2], [960, 540])
 
 
+def test_mouse_right_turns_toward_camera_right():
+    camera = FlyCamera(np.zeros(3), .7, 0)
+    right = np.array([np.sin(camera.yaw), -np.cos(camera.yaw), 0])
+    camera.update([], .02, [30, 0])
+    assert camera.forward() @ right > 0
+
+
 def test_pick_uses_displayed_frame_and_rejects_expired():
     d = Demo.__new__(Demo)
     d.frame_id = 9

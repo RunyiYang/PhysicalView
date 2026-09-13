@@ -27,7 +27,7 @@ class FlyCamera:
                          np.cos(self.pitch)*np.sin(self.yaw), np.sin(self.pitch)])
 
     def update(self, keys, dt, look=(0, 0), boost=False):
-        self.yaw += float(np.clip(look[0], -2000, 2000)) * .0025
+        self.yaw -= float(np.clip(look[0], -2000, 2000)) * .0025
         self.pitch = float(np.clip(self.pitch-float(np.clip(look[1], -2000, 2000))*.0025,
                                    -np.pi/2+.02, np.pi/2-.02))
         right = np.array([np.sin(self.yaw), -np.cos(self.yaw), 0.])
