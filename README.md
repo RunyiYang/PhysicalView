@@ -1,5 +1,11 @@
 # PhysicalView
 
+**PhiView demo:** a separate, strictly image-only browser viewport with full Gaussian
+rendering, visibility-aware picking/highlights, physics interactions, generated alternatives,
+prompted inpainting and robot commands. Run `sbatch run/phiview.sbatch` for the H200 demo.
+See [PhiView setup, controls and validation](docs/PHIVIEW.md). The existing viser studio
+below remains available.
+
 Interactive, GPU-backed web studio (viser) for the **SimAny real-to-sim pipeline**: load a
 scanned room, discover objects, generate 3D assets with a chosen model, register them with a
 chosen registration mode, annotate physics, inpaint a chosen region with a text prompt, export
