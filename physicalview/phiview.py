@@ -203,6 +203,9 @@ class Demo:
                     points = self.scene.raw['means'][self.scene.indices[name]].detach().cpu().numpy()
                     install_proxy(self.physics, name, points, self.out/'interactive_objects'/name)
             self.physics.enable(names); self.mode = 'simulation'
+            if any(self.state.objects[n].meta.get('interactive') for n in names):
+                self.click_selection.status = {'state': 'simulatable',
+                    'message': 'Ready for fall, friction, throw and shooting.', 'object': self.selected}
         elif op in ('fall', 'friction', 'throw'):
             self.physics.perturb(self.selected_required(), op, self.camera.forward(), msg.get('strength', 3))
             self.mode = 'simulation'
