@@ -3,12 +3,15 @@
 PhiView keeps rendering, segmentation, collision construction, policy inference,
 and physics on the server. The browser displays JPEGs and sends input events.
 
-* Click selects a known object or requests a SAM3 point mask for a new region.
-* Left-drag draws a bounding box. A dominant existing object is selected directly;
+* **View**: left-drag orbits, right-drag/Shift-left-drag pans, wheel zooms, and
+  middle-drag dollies. Clicks in this mode never select or segment objects.
+* **Select object**: click selects a known object or requests a SAM3 point mask.
+* **Move object**: drag the selected simulatable body across its horizontal plane.
+  Physics is paused; Esc ends the drag and deselects, and Reset restores the initial pose.
+* In Select object mode, left-drag draws a bounding box. A dominant existing object is selected directly;
   otherwise SAM3 receives the box on the exact displayed frame. Disconnected
   distractors are removed from the prompted mask. Dragging pauses
-  physics and pins that frame for up to 60 seconds. Right-drag still rotates the
-  free camera. Selected objects stay bright red with a white outline when other
+  physics and pins that frame for up to 60 seconds. Selected objects stay bright red with a white outline when other
   highlights are disabled.
 * **Make simulatable** creates a convex collision proxy from the selected visible
   Gaussian surface. Hidden geometry is unknown; mass and friction are unmeasured
@@ -49,13 +52,17 @@ choices. Actions are chunks of 15 absolute 8D targets (seven joints and gripper)
 executed at 15 Hz of simulation time with 40 physics substeps and a 0.2 rad joint
 delta cap. A default command runs 150 ticks. This is not a promise of 15 FPS wall
 time or manipulation success. Pause/reset cancel execution, and late inference
-responses cannot restart it. The simulation has no physical robot connection.
+responses cannot restart it. All object highlights are hidden while a learned policy
+loads/executes or scripted IK is running, then restored without losing selection.
+The simulation has no physical robot connection.
 
 Modules: `phiview_box.py` handles rectangle selection; `phiview_selection.py`
 handles discovery and persistence; `phiview_rigs.py` handles hardware and camera
 contracts; `phiview_policy.py` handles observations and asynchronous control;
 `phiview_policy_server.py` loads checkpoints in their separate environment;
-`phiview_demo.py` handles scene-specific automatic preparation.
+`phiview_demo.py` handles scene-specific automatic preparation; `phiview_navigation.py`
+and `phiview_drag.py` handle camera gestures and manual object placement. The small
+`web/phiview_mouse.js` module routes browser input for the three mouse modes.
 
 ## Validation on 2026-09-14
 
