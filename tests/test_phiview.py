@@ -35,6 +35,7 @@ def test_pick_uses_displayed_frame_and_rejects_expired():
     d.frame_id = 9
     d.frames = {7: (np.array([[0, 2], [1, 0]]), None, None, None)}
     d.scene = SimpleNamespace(names=['obj_00', 'obj_01'])
+    d.click_selection = SimpleNamespace(busy=False, status={})
     d.physics = SimpleNamespace(data=SimpleNamespace(time=0))
     import io
     d.audit = io.StringIO()

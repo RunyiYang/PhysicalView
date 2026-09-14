@@ -198,7 +198,7 @@ class GaussianScene:
             ids[confidence < .25] = 0
             mask = ids.cpu().numpy().astype(np.uint16)
         self.last_rgb = (np.clip(rgb, 0, 1)*255+.5).astype(np.uint8)
-        if highlight:
+        if highlight or selected is not None:
             from physicalview.highlight import highlight_objects
-            rgb = highlight_objects(rgb, mask, self.ids.get(selected))
+            rgb = highlight_objects(rgb, mask, self.ids.get(selected), show_all=highlight)
         return (np.clip(rgb, 0, 1)*255+.5).astype(np.uint8), mask, depth, w2c, K
