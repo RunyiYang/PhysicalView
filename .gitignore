@@ -10,7 +10,7 @@ MUJOCO_LOG.TXT
 
 .venv/
 .claude/
-backends/
+/backends/
 data/
 weights/
 dist/
