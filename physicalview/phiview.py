@@ -125,6 +125,7 @@ class Demo:
                 'mask_source': self.scene.mask_sources[name]})
         return {'ready': self.ready, 'scene': self.args.scene, 'objects': objects,
                 'selected': self.selected, 'mode': self.mode, 'highlight': self.highlight,
+                'background_completion': self.scene.clean is not None,
                 'frame': self.frame_id, 'render_ms': round(self.last_render_s*1000, 1),
                 'resolution': self.wh, 'native_resolution': self.native_wh,
                 'gaussians': self.scene.count, 'gpu': self.manifest['hardware'],
@@ -177,7 +178,7 @@ class Demo:
                 raise ValueError('Unknown view')
             if mode == 'clean_selected':
                 self.selected_required()
-            if mode != 'original' and self.scene.clean is None:
+            if mode in ('clean_selected', 'clean_all') and self.scene.clean is None:
                 raise ValueError('Run inpainting before switching to this view')
             self.mode = mode
             if mode != 'simulation':

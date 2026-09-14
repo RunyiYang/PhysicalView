@@ -117,7 +117,7 @@ class GaussianScene:
         transforms = transforms or {}
         if mode == 'original':
             return self.raw, self.labels
-        if self.clean is None:
+        if self.clean is None and mode != 'simulation':
             raise ValueError('An inpainted background is required for this view')
         hidden = set(simulatable) if mode == 'clean_all' else ({selected} if mode == 'clean_selected' else set())
         prompt_bg = self.prompt_backgrounds.get(frozenset(hidden)) if hidden else None
@@ -127,7 +127,13 @@ class GaussianScene:
             # only for picking in the default clean composition; here the clean image is
             # deliberately unlabelled until masks are regenerated for that version.
             return prompt_bg, torch.zeros(len(prompt_bg['means']), device='cuda', dtype=torch.long)
-        parts, labels = [self.clean], [torch.zeros(len(self.clean['means']), device='cuda', dtype=torch.long)]
+        if self.clean is None:
+            # Simulation can reveal unobserved regions, without claiming completion.
+            # Keep the original observed background and move only enabled objects.
+            background = ~self.removed
+            parts, labels = [subset(self.raw, background)], [self.labels[background]]
+        else:
+            parts, labels = [self.clean], [torch.zeros(len(self.clean['means']), device=self.labels.device, dtype=torch.long)]
         # Restore original carved Gaussians except hidden or replaced objects. This preserves
         # original appearance for all unselected objects, including rejected proposals.
         restore = self.removed.clone()
@@ -145,7 +151,7 @@ class GaussianScene:
             if n in transforms:
                 gs = transform_gaussians(gs, transforms[n])
             parts.append(gs)
-            labels.append(torch.full((len(gs['means']),), self.ids[n], device='cuda', dtype=torch.long))
+            labels.append(torch.full((len(gs['means']),), self.ids[n], device=self.labels.device, dtype=torch.long))
         return cat_gaussians(parts), torch.cat(labels)
 
     def render(self, camera, wh, mode, selected, simulatable, transforms=None, highlight=True):
