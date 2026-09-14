@@ -26,7 +26,7 @@ NOGPU = GpuInfo(present=False)
 @pytest.fixture
 def cfg(tmp_path):
     base = load_config()
-    return replace(base, interpreters={k: Path(PY) for k in base.interpreters},
+    return replace(base, repo_root=tmp_path, interpreters={k: Path(PY) for k in base.interpreters},
                    studio_out=tmp_path / "studio")
 
 

@@ -1,9 +1,13 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "physicalview"
-version = "0.1.0"
+version = "0.2.0"
 description = "PhysicalView: interactive GPU-backed viser studio for the SimAny real-to-sim pipeline (scene, generation, registration, inpainting, robot policies)."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.13"
 license = { file = "LICENSE" }
 authors = [{ name = "Runyi Yang" }]
 dependencies = [
@@ -19,11 +23,16 @@ dependencies = [
   "opencv-python-headless",
 ]
 
+[project.urls]
+Repository = "https://github.com/RunyiYang/PhysicalView"
+Issues = "https://github.com/RunyiYang/PhysicalView/issues"
+
 [project.scripts]
+physicalview = "physicalview.cli:main"
 phiview = "physicalview.phiview:main"
 
 [tool.setuptools.package-data]
-physicalview = ["web/*.html"]
+physicalview = ["web/*.html", "resources/*.yaml", "resources/pipelines/*.json"]
 # torch (CUDA 12.8 build) and gsplat (compiled from source for sm_80/86/90/120) are managed by
 # run/setup_env.sh, not by pip resolution; see docs/ENV.md.
 
@@ -32,3 +41,14 @@ include = ["physicalview*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[dependency-groups]
+dev = ["pytest==9.0.2", "build>=1.2", "torch==2.9.1"]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform != 'darwin'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

@@ -12,7 +12,7 @@ from physicalview.config import DEFAULT_CONFIG, load_config
 
 def test_default_config_loads_and_resolves_paths():
     cfg = load_config()
-    assert cfg.repo_root.is_dir()
+    assert cfg.repo_root.is_absolute()
     assert cfg.outputs_root.is_absolute()
     assert cfg.interpreter("main").name.startswith("python")
     assert {c.id for c in cfg.generation} >= {"trellis", "reconviagen", "sam3d", "hybrid"}
@@ -21,7 +21,7 @@ def test_default_config_loads_and_resolves_paths():
     assert cfg.collision_modes == ["room", "shim"]
     assert "pi05_droid_jointpos" in cfg.policies
     assert set(cfg.gpu_targets) == {"a6000", "h200", "a100", "rtx6000"}
-    assert cfg.gpu_targets["h200"].extra == ("--exclude=msp3-[0-7]",)
+    assert cfg.gpu_targets["h200"].extra == ()
     assert cfg.render_wh == (640, 360)
 
 

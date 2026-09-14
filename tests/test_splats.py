@@ -46,7 +46,8 @@ def test_quat_to_matrix_matches_closed_form_and_is_rotation():
     Rz = SP.quat_wxyz_to_matrix(np.array([[np.cos(np.pi / 4), 0, 0, np.sin(np.pi / 4)]]))[0]
     assert np.allclose(Rz, _rotz(90), atol=1e-9)
     # against agents.core.common's scalar implementation
-    from agents.core.common import quat_to_rot_wxyz
+    common = pytest.importorskip("agents.core.common", reason="Backend quaternion cross-check requires SimAny")
+    quat_to_rot_wxyz = common.quat_to_rot_wxyz
     for qi in q[:5]:
         assert np.allclose(SP.quat_wxyz_to_matrix(qi[None])[0], quat_to_rot_wxyz(qi), atol=1e-9)
 
@@ -106,7 +107,13 @@ def test_pose_arrays_identity_and_similarity():
     exp_cov = s * s * (R[None] @ arr.covariances.astype(np.float64) @ R.T[None])
     assert np.allclose(posed.covariances, exp_cov, atol=1e-6)
     assert posed.rgbs is arr.rgbs and posed.opacities is arr.opacities
-    # consistent with agents.core.common.transform_gaussians on the underlying gaussians
+
+
+@pytest.mark.backend
+def test_pose_arrays_match_backend_gaussian_transform():
+    T = np.eye(4)
+    T[:3, :3] = .5 * _rotz(30)
+    T[:3, 3] = [1, -2, 3]
     from agents.core.common import transform_gaussians
     gs = _gs(30)
     tg = transform_gaussians(gs, T)
@@ -145,7 +152,9 @@ def test_frame_transform_rotation_translation_case():
     R0 = SP.quat_wxyz_to_matrix(q0[None])[0]
     Rd = SP.quat_wxyz_to_matrix(_quat_from_axis_angle([0.1, 0.2, 1.0], 90)[None])[0]
     R = Rd @ R0
-    from agents.core.common import rot_to_quat_wxyz
+    from scipy.spatial.transform import Rotation
+    def rot_to_quat_wxyz(matrix):
+        return Rotation.from_matrix(matrix).as_quat()[[3, 0, 1, 2]]
     q = rot_to_quat_wxyz(R)
     p = Rd @ p0 + np.array([0.3, -0.2, 0.1])  # the body origin follows the rigid motion
     T = SP.frame_transform(aligned, p, q, p0, q0)
@@ -167,7 +176,9 @@ def test_frame_transform_equals_absolute_when_body_frame_is_canonical():
     aligned = np.eye(4)
     aligned[:3, :3] = s * R0
     aligned[:3, 3] = t0
-    from agents.core.common import rot_to_quat_wxyz
+    from scipy.spatial.transform import Rotation
+    def rot_to_quat_wxyz(matrix):
+        return Rotation.from_matrix(matrix).as_quat()[[3, 0, 1, 2]]
     q0 = rot_to_quat_wxyz(R0)
     Rn = SP.quat_wxyz_to_matrix(_quat_from_axis_angle([1, 1, 0], 40)[None])[0] @ R0
     qn, pn = rot_to_quat_wxyz(Rn), np.array([0.7, 0.1, 1.2])

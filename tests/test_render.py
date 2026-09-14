@@ -58,6 +58,7 @@ def test_mujoco_camera_axes_and_intrinsics(mj, cam):
 
 
 @pytest.mark.parametrize("cam", ["cam", "tilted"])
+@pytest.mark.gpu
 def test_mujoco_camera_matches_renderer_pixels(mj, cam):
     """Project the sphere centre with our (w2c, K) and compare with the centroid of the
     sphere's pixels in MuJoCo's own segmentation render."""
