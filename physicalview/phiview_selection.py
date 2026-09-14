@@ -92,6 +92,12 @@ def restore_objects(state, out):
             proxy = json.loads(proxy_path.read_text())
             state.objects[directory.name].meta["interactive_proxy"] = proxy
             state.objects[directory.name].physics = proxy["physics"]
+    # Keep superseded click files as provenance; match receipts, not IDs alone.
+    for rec in list(state.objects.values()):
+        for old in rec.meta.get('supersedes', []):
+            previous = state.objects.get(old['name'])
+            if previous and previous.meta.get('selection_work') == old['selection_work']:
+                state.objects.pop(old['name'])
 
 
 class ClickSelection:
@@ -100,6 +106,15 @@ class ClickSelection:
         self.thread = None
         self.pending = None
         self.status = {"state": "idle"}
+        self.generation = 0
+        self.lock = threading.Lock()
+
+    def cancel(self):
+        # A running GPU call may finish, but cannot republish a cancelled result.
+        with self.lock:
+            self.generation += 1
+            self.pending = None
+            self.status = {"state": "idle", "message": "Selection cleared."}
 
     @property
     def busy(self):
@@ -107,7 +122,7 @@ class ClickSelection:
             self.thread is not None and self.thread.is_alive()
         )
 
-    def start(self, fid, x, y, box=None):
+    def start(self, fid, x, y, box=None, preset=None):
         d = self.demo
         if self.busy or (d.pipeline_thread and d.pipeline_thread.is_alive()):
             raise ValueError("Wait for the current object or scene build to finish")
@@ -134,6 +149,7 @@ class ClickSelection:
         }
         (work / "camera.json").write_text(json.dumps(camera, indent=2))
         self.status = {"state": "running", "message": "Finding the boxed object…" if box else "Finding the clicked object…"}
+        generation = self.generation
 
         def worker():
             try:
@@ -161,14 +177,18 @@ class ClickSelection:
                         timeout=180,
                         check=True,
                     )
-                self.pending = (work, depth, w2c, K)
+                with self.lock:
+                    if generation == self.generation:
+                        self.pending = (work, depth, w2c, K, preset)
             except Exception as exc:
-                self.status = {
-                    "state": "failed",
-                    "message": "Object selection failed; try another point.",
-                    "error": str(exc),
-                    "log": str(work / "inference.log"),
-                }
+                with self.lock:
+                    if generation == self.generation:
+                        self.status = {
+                            "state": "failed",
+                            "message": "Object selection failed; try another point.",
+                            "error": str(exc),
+                            "log": str(work / "inference.log"),
+                        }
 
         self.thread = threading.Thread(target=worker, daemon=True)
         self.thread.start()
@@ -177,11 +197,15 @@ class ClickSelection:
         if self.pending is None:
             return
         d = self.demo
-        work, depth, w2c, K = self.pending
+        work, depth, w2c, K, preset = self.pending
         self.pending = None
         try:
             mask = np.load(work / "mask.npy")
             idx = lift_mask(d.scene.raw["means"], d.scene.labels, mask, depth, w2c, K)
+            supersedes = []
+            if preset:
+                from physicalview.phiview_demo import complete_fragments
+                idx, supersedes = complete_fragments(d, mask, depth, w2c, K, idx)
             if len(idx) < 24:
                 raise ValueError(
                     "Too little unassigned 3D surface; try another view or point"
@@ -196,7 +220,7 @@ class ClickSelection:
             meta = {
                 "name": name,
                 "index": index,
-                "label": f"Clicked object {index}",
+                "label": preset['label'] if preset else f"Clicked object {index}",
                 "centroid": ((lo + hi) / 2).tolist(),
                 "aabb": [lo.tolist(), hi.tolist()],
                 "scene_splat": str(d.state.result_set.splat_ply),
@@ -206,10 +230,14 @@ class ClickSelection:
                 "gaussians": len(idx),
                 "interactive": True,
             }
+            if preset:
+                meta.update(demo_preset=preset['id'], supersedes=supersedes)
             (directory / "selection.json").write_text(json.dumps(meta, indent=2))
             rec = record_from_meta(directory, meta)
+            for old in supersedes:
+                d.state.objects.pop(old['name'])
             d.state.objects[name] = rec
-            d.scene.add_object(name, idx, meta["mask_source"])
+            d.scene.add_object(name, idx, meta["mask_source"], supersedes=[old['name'] for old in supersedes])
             d.selected = name
             d.mode = "original"
             d.frames.clear()

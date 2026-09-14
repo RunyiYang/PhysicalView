@@ -15,6 +15,12 @@ and physics on the server. The browser displays JPEGs and sends input events.
   defaults. Object records and proxies are scoped to their source build so IDs
   from rediscovery cannot inherit an unrelated collision body. Existing primitive
   floor/table supports survive rediscovery; no new support geometry is inferred.
+* **Deselect** or **Esc** clears selection and invalidates any pending SAM3 result.
+  Physical bodies and saved assets remain available. The `fb5a96b1a2` demo prepares
+  the green spray bottle automatically, using a curated source-camera box and fresh
+  SAM3 inference. It restores that object on restart; **Prepare green bottle** can
+  select it again. Only overlapping unprepared click fragments are consolidated,
+  with their original receipts/files preserved. Use `--no-demo-prepare` to skip it.
 
 The viewer selector chooses the control policy only: base π0.5 DROID, the
 sim co-trained π0.5 variant, or explicitly labeled scripted IK. Robot hardware is
@@ -48,7 +54,8 @@ responses cannot restart it. The simulation has no physical robot connection.
 Modules: `phiview_box.py` handles rectangle selection; `phiview_selection.py`
 handles discovery and persistence; `phiview_rigs.py` handles hardware and camera
 contracts; `phiview_policy.py` handles observations and asynchronous control;
-`phiview_policy_server.py` loads checkpoints in their separate environment.
+`phiview_policy_server.py` loads checkpoints in their separate environment;
+`phiview_demo.py` handles scene-specific automatic preparation.
 
 ## Validation on 2026-09-14
 
