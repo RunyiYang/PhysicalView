@@ -54,6 +54,7 @@ class Capture:
                              for p in sorted(set(Path(__file__).parent.glob('paper*.py')) | set(Path(__file__).parent.glob('phiview*.py')) | set(Path(__file__).parent.glob('inpaint_surface*.py')))},
             'features':FEATURES,'source_native_resolution':self.d.native_wh,
             'export_resolution':self.paper_wh,'png_lossless':True,
+            'rasterize_mode':self.d.scene.rasterize_mode,
             'image_enhancement':'none','publication_review':'pending'}
         save_json(self.root/'capture-code.json',self.capture_code)
 
@@ -71,6 +72,7 @@ class Capture:
              'qvel':d.physics.data.qvel.copy(),'mask_source':d.scene.mask_sources,
              'selected_bbox_xyxy':selected_bbox,'selected_visible_pixels':len(xs),
              'publication_review':'pending','extra':extra or {},'capture_source_sha256':self.capture_code['source_sha256']}
+        rec['rasterize_mode']=d.scene.rasterize_mode
         save_json(p.with_suffix('.json'),rec)
         self.frames.append(rec['file']);return image
 
@@ -228,14 +230,41 @@ class Capture:
                   'publication_review':'pending','counts':{'captured':sum(r['status']=='captured' for r in self.rows.values()),'total':len(FEATURES)}})
 
     def original(self):
-        self.restore();self.d.execute({'op':'camera','name':self.chosen['camera']});self.shot('a_original','overview')
+        self.restore();self.d.execute({'op':'camera','name':self.context_camera()});self.shot('a_original','overview')
         self.d.camera=copy.deepcopy(self.base_camera);self.shot('a_original','target-detail')
         return {'gaussians':self.d.scene.count,'downsampling':False}
     def highlights(self):
         self.restore(highlight=True);self.d.selected=None
-        self.d.execute({'op':'camera','name':self.chosen['camera']});self.shot('b_highlight_all','all-proposals-overview')
+        self.d.execute({'op':'camera','name':self.context_camera()});self.shot('b_highlight_all','all-proposals-overview')
         self.d.camera=copy.deepcopy(self.base_camera);self.shot('b_highlight_all','all-proposals-detail')
         return {'proposals':len(self.d.scene.names),'provenance':self.d.manifest['discovery_provenance']}
+    def context_camera(self):
+        """Choose an observed room view independently of the interaction close-up."""
+        if hasattr(self,'context_name'):return self.context_name
+        d=self.d;previous=(d.wh,d.highlight,d.selected,copy.deepcopy(d.camera),d.camera_name)
+        names={self.chosen['camera']}
+        for i in np.linspace(0,len(d.camera_names)-1,min(48,len(d.camera_names))).astype(int):
+            names.add(d.camera_names[i])
+        rows=[]
+        try:
+            d.wh=(768,512);d.highlight=False;d.selected=None
+            for name in sorted(names):
+                d.execute({'op':'camera','name':name});im=d.render();mask=d.frames[d.frame_id][0]
+                ids,counts=np.unique(mask,return_counts=True)
+                visible=int(np.count_nonzero((ids>0)&(counts>=80)))
+                q=quality(im)
+                # Favor multiple visible proposals and a level room view. No generated
+                # image, inpainting outcome or simulation outcome enters this choice.
+                level=float(np.exp(-max(0.,abs(d.camera.pitch)-.55)*2))
+                score=(visible+min(float(np.mean(mask>0))/.08,1.))*level*(1-q['black_fraction'])**3
+                rows.append({'camera':name,'score':score,'visible_proposals':visible,
+                             'pitch':d.camera.pitch,'quality':q})
+            best=max(rows,key=lambda r:r['score']);self.context_name=best['camera']
+            save_json(self.root/'context-survey.json',{'selected':best,'candidates':rows,
+                      'selection_basis':'Observed-camera proposal visibility and room framing only'})
+        finally:
+            d.wh,d.highlight,d.selected,d.camera,d.camera_name=previous
+        return self.context_name
     def pick(self):
         self.restore();d=self.d;d.selected=None;self.shot('c_mouse_pick','before')
         import cv2

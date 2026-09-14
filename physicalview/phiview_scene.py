@@ -55,6 +55,7 @@ class GaussianScene:
         from agents.core.common import load_gaussians
         self.state = state
         self.raw = state.splat_gs
+        self.rasterize_mode = 'antialiased'
         if self.raw is None:
             raise RuntimeError('Original Gaussian scene is required')
         self.names = list(sorted(state.objects))
@@ -150,18 +151,23 @@ class GaussianScene:
     def render(self, camera, wh, mode, selected, simulatable, transforms=None, highlight=True):
         import torch
         from gsplat import rasterization
-        from agents.core.common import render_view
         gs, labels = self.compose(mode, selected, simulatable, transforms)
         w2c, K = camera.matrices(wh)
-        rgb, depth, _ = render_view(gs, w2c, K, *wh, render_mode='RGB+ED')
         # Rasterize object membership against the SAME occluding scene geometry.
         with torch.inference_mode():
+            viewmats=torch.tensor(w2c,dtype=torch.float32,device='cuda')[None]
+            intrinsics=torch.tensor(K,dtype=torch.float32,device='cuda')[None]
+            raster_args=dict(means=gs['means'],quats=gs['quats'],scales=gs['scales'],
+                             opacities=gs['opacities'],viewmats=viewmats,Ks=intrinsics,
+                             width=wh[0],height=wh[1],packed=False,near_plane=.01,far_plane=100.,
+                             rasterize_mode=self.rasterize_mode)
+            # Screen-space opacity compensation belongs to rasterization; original
+            # Gaussian rows/parameters remain intact. Use it for RGB and picking alike.
+            color,_,_=rasterization(**raster_args,colors=gs['sh'],sh_degree=gs['sh_degree'],render_mode='RGB+ED')
+            rgb=color[0,...,:3].clamp(0,1).cpu().numpy()
+            depth=color[0,...,3].cpu().numpy()
             features = torch.nn.functional.one_hot(labels, len(self.names)+1).float()
-            out, _, _ = rasterization(means=gs['means'], quats=gs['quats'], scales=gs['scales'],
-                opacities=gs['opacities'], colors=features,
-                viewmats=torch.tensor(w2c, dtype=torch.float32, device='cuda')[None],
-                Ks=torch.tensor(K, dtype=torch.float32, device='cuda')[None], width=wh[0], height=wh[1],
-                sh_degree=None, packed=False, near_plane=.01, far_plane=100.)
+            out, _, _ = rasterization(**raster_args,colors=features,sh_degree=None)
             confidence, ids = out[0].max(-1)
             ids[confidence < .25] = 0
             mask = ids.cpu().numpy().astype(np.uint16)

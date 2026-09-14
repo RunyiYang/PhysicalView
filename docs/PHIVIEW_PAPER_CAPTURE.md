@@ -154,3 +154,41 @@ consistent observed camera frames and requires at least eight before training.
 and this state filtering use dataset mesh trajectories, so these poses are GT-assisted.
 This avoids silently mixing changed manipuland poses across episodes into one static
 Gaussian scene; actual BEHAVIOR extraction remains a pending execution gate.
+
+Room overview selection is now separate from the interaction target close-up. It
+scores up to 49 observed cameras using visible proposals, pitch and black-pixel
+coverage, without examining generated or simulated outcomes. The actual H200
+`context-repair/c50d2d1d42` trial improved desk context; prior official frames are
+preserved. `context-survey.json` records every candidate and the selected camera.
+
+Native BEHAVIOR assets were subsequently located at
+`SimAny/third_party/behavior1k_datasets`. All 51 scene configurations have their
+referenced main encrypted USD object files, and OmniGibson 3.9.0 imports in the
+preinstalled `/group/streetsplat/.conda/envs/behavior1k` environment. This does not
+validate texture dependencies or renderer execution. A bounded A6000 RGB readiness
+probe is queued after LIBERO; the BEHAVIOR first scene waits for its termination.
+The WDS adapter remains the default until a native capture route is demonstrated.
+The probe has no feature-count or paper-quality credit. Account QoS rejected the
+`rendering` partition; the accepted submission uses `batch` with `normal` QoS.
+
+`run/paper_carve_probe.py` compares observed Gaussians before/after removal without
+generated fill. This is a diagnostic for separating residual source geometry from
+fill artifacts, not evidence of prompt-conditioned completion. Its outputs remain
+outside the official scene folders.
+
+An exact observed-camera renderer diagnostic compared classic and antialiased
+gsplat rendering while keeping all source Gaussian rows/parameters. For
+`3864514494/DSC06115.JPG`, PSNR against that source frame was 27.8445 versus
+30.6737 dB; for `c50d2d1d42/DSC01757.JPG`, 27.2389 versus 27.7714 dB. These two
+checks are not a held-out evaluation. A quaternion-order diagnostic was worse and
+was not adopted. PhiView now uses antialiased rasterization for both RGB/depth
+and object-ID picking, and records the mode in manifests and PNG sidecars.
+The actual H200 cup trial passed original/highlight/click/clean capture checks;
+its clean background still has visible artifacts and is not approved for paper.
+Job `894256` recaptures all ten constructed ScanNet++ scenes, archiving earlier
+frames, before releasing LIBERO. It does not rerun or relabel construction models.
+
+Paper panels keep fall and friction in separate rows and include all eight
+navigation frames. The gallery uses lightweight review JPEGs; the editable SVGs
+still embed the unchanged lossless PNG files. `panel-layout.json` records which
+frames appear in each panel.

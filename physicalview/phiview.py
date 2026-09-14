@@ -101,6 +101,7 @@ class Demo:
                     'config_sha256': hashlib.sha256(Path(args.config).read_bytes()).hexdigest(),
                     'web_sha256': hashlib.sha256((Path(__file__).parent/'web/phiview.html').read_bytes()).hexdigest(),
                     'gaussians': self.scene.count, 'sh_degree': self.scene.raw['sh_degree'],
+                    'rasterize_mode': self.scene.rasterize_mode,
                     'native_resolution': self.native_wh, 'stream_resolution': self.wh,
                     'hardware': torch.cuda.get_device_name(), 'node': socket.gethostname(),
                     'slurm_job_id': os.environ.get('SLURM_JOB_ID'),

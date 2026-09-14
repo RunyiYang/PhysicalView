@@ -1,5 +1,5 @@
 """Build a review gallery and editable SVG panels without modifying scene pixels."""
-import argparse,base64,csv,html,json
+import argparse,base64,csv,html,json,math
 from pathlib import Path
 from PIL import Image
 from physicalview.paper_capture import FEATURES
@@ -8,19 +8,28 @@ from physicalview.phiview import save_json
 
 def panel(folder,feature,paths,sidecar):
     # Image data remains lossless; text/caption is a separate editable vector layer.
-    picks=paths if len(paths)<=3 else [paths[0],paths[len(paths)//2],paths[-1]]
+    if feature=='i_fall_friction':
+        picks=[]
+        for action in ('fall','friction'):
+            group=[p for p in paths if p.stem.startswith(action+'-')]
+            picks.extend(group if len(group)<=3 else [group[0],group[len(group)//2],group[-1]])
+    elif feature=='m_navigation':picks=paths
+    else:picks=paths if len(paths)<=3 else [paths[0],paths[len(paths)//2],paths[-1]]
     cell_w=960;cell_h=640;gap=24;top=70;bottom=75
-    width=cell_w*len(picks)+gap*(len(picks)-1)
+    columns=min(4 if feature=='m_navigation' else 3,len(picks));rows=math.ceil(len(picks)/columns)
+    width=cell_w*columns+gap*(columns-1)
+    height=top+rows*(cell_h+bottom)
     parameter=feature=='e_physical_parameters'
     if parameter:width+=520
-    doc=[f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{top+cell_h+bottom}" viewBox="0 0 {width} {top+cell_h+bottom}">',
+    doc=[f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
          '<rect width="100%" height="100%" fill="white"/>',
          f'<text x="12" y="42" font-family="DejaVu Sans,sans-serif" font-size="28">{html.escape(FEATURES[feature])}</text>']
     for i,p in enumerate(picks):
-        x=i*(cell_w+gap);im=Image.open(p);w,h=im.size;dh=min(cell_h,cell_w*h/w);dw=dh*w/h
+        x=(i%columns)*(cell_w+gap);y=top+(i//columns)*(cell_h+bottom)
+        im=Image.open(p);w,h=im.size;dh=min(cell_h,cell_w*h/w);dw=dh*w/h
         encoded=base64.b64encode(p.read_bytes()).decode()
-        doc += [f'<image x="{x}" y="{top}" width="{dw}" height="{dh}" href="data:image/png;base64,{encoded}"/>',
-                f'<text x="{x+12}" y="{top+cell_h+32}" font-family="DejaVu Sans,sans-serif" font-size="24">{html.escape(p.stem)}</text>']
+        doc += [f'<image x="{x}" y="{y}" width="{dw}" height="{dh}" href="data:image/png;base64,{encoded}"/>',
+                f'<text x="{x+12}" y="{y+cell_h+32}" font-family="DejaVu Sans,sans-serif" font-size="24">{html.escape(p.stem)}</text>']
     if parameter:
         data=json.loads((folder/'parameters.json').read_text());x=cell_w+32
         lines=[('Selected object',sidecar['state']['selected']),('Mass (kg)',f"{data['mass_kg']:.4g}"),('Sliding friction',f"{data['friction'][0]:.4g}"),('Inertia (kg m²)',', '.join(f'{v:.3g}' for v in data['inertia_kg_m2'])),('Source','Active MuJoCo model')]
@@ -28,6 +37,22 @@ def panel(folder,feature,paths,sidecar):
             y=top+45+i*105
             doc += [f'<text x="{x}" y="{y}" font-family="DejaVu Sans,sans-serif" font-size="20" fill="#64748b">{html.escape(label)}</text>',f'<text x="{x}" y="{y+35}" font-family="DejaVu Sans,sans-serif" font-size="25">{html.escape(str(value))}</text>']
     doc.append('</svg>');(folder/'panel.svg').write_text('\n'.join(doc))
+    # Lightweight review derivative; publication SVG still embeds original PNGs.
+    from PIL import ImageDraw
+    scale=1280/width;preview=Image.new('RGB',(1280,round(height*scale)),'white');draw=ImageDraw.Draw(preview)
+    draw.text((8,8),FEATURES[feature],fill='black')
+    for i,p in enumerate(picks):
+        im=Image.open(p).convert('RGB');im.thumbnail((round(cell_w*scale),round(cell_h*scale)))
+        x=round((i%columns)*(cell_w+gap)*scale);y=round((top+(i//columns)*(cell_h+bottom))*scale)
+        preview.paste(im,(x,y));draw.text((x+4,y+round(cell_h*scale)+5),p.stem,fill='black')
+    if parameter:
+        for i,(label,value) in enumerate(lines):
+            x=round((cell_w+32)*scale);y=round((top+45+i*105)*scale)
+            draw.text((x,y),label,fill='#64748b');draw.text((x,y+20),str(value),fill='black')
+    preview.save(folder/'review-preview.jpg',quality=90)
+    (folder/'panel-layout.json').write_text(json.dumps({'frames':[p.name for p in picks],
+        'columns':columns,'rows':rows,'original_pngs_embedded':True,
+        'review_preview_only':'review-preview.jpg'},indent=2))
 
 
 def main():
@@ -45,7 +70,8 @@ def main():
                 if paths:
                     side=json.loads(paths[0].with_suffix('.json').read_text());panel(scene/key,key,paths,side)
                     link=(scene/key/'panel.svg').relative_to(root)
-                    cards.append(f'<article data-dataset="{dataset}" data-feature="{key}"><h2>{dataset} / {scene.name} / {key}</h2><p>{html.escape(title)} · {row["status"]} · publication review: {html.escape(review["status"])}</p><a href="{link}"><img loading="lazy" src="{link}"></a><p><a href="{scene.relative_to(root)}/features.json">Evidence</a> · <a href="{scene.relative_to(root)}/{key}/">Lossless PNG and sidecars</a></p></article>')
+                    preview=(scene/key/'review-preview.jpg').relative_to(root)
+                    cards.append(f'<article data-dataset="{dataset}" data-feature="{key}"><h2>{dataset} / {scene.name} / {key}</h2><p>{html.escape(title)} · {row["status"]} · publication review: {html.escape(review["status"])}</p><a href="{link}"><img loading="lazy" src="{preview}"></a><p><a href="{link}">Editable SVG with lossless source PNGs</a> · <a href="{scene.relative_to(root)}/features.json">Evidence</a> · <a href="{scene.relative_to(root)}/{key}/">Lossless PNG and sidecars</a></p></article>')
     save_json(root/'coverage.json',rows)
     with (root/'coverage.csv').open('w') as f:
         w=csv.DictWriter(f,fieldnames=['dataset','scene','feature','status','pngs','review','error']);w.writeheader();w.writerows(rows)
