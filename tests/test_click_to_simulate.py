@@ -94,6 +94,11 @@ def test_add_proxy_preserves_existing_motion_and_reset_pose(tmp_path):
     sim.reset()
     assert sim.data.qpos[qa] == 0
     assert np.allclose(sim.data.qpos[sim.addresses("obj_01")[0] :][:3], proxy["center"])
+    restart_dir = tmp_path / "restart"
+    restart_dir.mkdir()
+    restored = DemoPhysics(state, restart_dir)
+    assert restored.available == {"obj_00", "obj_01"}
+    assert np.allclose(restored.initial["obj_01"][0], proxy["center"])
 
 
 def test_invalid_proxy_leaves_live_model_intact(tmp_path):
