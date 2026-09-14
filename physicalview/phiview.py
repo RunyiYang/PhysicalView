@@ -212,9 +212,9 @@ class Demo:
         elif op in ('robot', 'robot_command'):
             name = self.selected_required()
             if op == 'robot':
-                self.physics.add_robot(name)
+                self.physics.add_robot(name, camera_position=self.camera.position)
             else:
-                self.physics.command_robot(name, str(msg.get('command', ''))[:500])
+                self.physics.command_robot(name, str(msg.get('command', ''))[:500], camera_position=self.camera.position)
             self.mode = 'simulation'
         elif op == 'camera':
             name = msg.get('name', self.camera_name)

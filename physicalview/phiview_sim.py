@@ -227,6 +227,14 @@ class DemoPhysics:
                 d.qvel[da:da+6] = 0
             for c in d.contact:
                 a = m.geom(c.geom1).name or ''; b = m.geom(c.geom2).name or ''
+                if self.robot:
+                    ba = m.body(int(m.geom_bodyid[c.geom1])).name or ''
+                    bb = m.body(int(m.geom_bodyid[c.geom2])).name or ''
+                    target = self.robot['target']
+                    if ((ba.startswith('robot/') and bb == target) or
+                        (bb.startswith('robot/') and ba == target)):
+                        self.robot_status['target_contact_steps'] = self.robot_status.get('target_contact_steps', 0)+1
+                        self.robot_status['last_target_contact'] = {'time':float(d.time),'bodies':[ba,bb], 'position':c.pos.tolist()}
                 if a.startswith('phiview_ball') or b.startswith('phiview_ball'):
                     pair = sorted([a, b])
                     if not self.events or self.events[-1]['geoms'] != pair:
@@ -237,7 +245,7 @@ class DemoPhysics:
             self.running = False
             raise RuntimeError('Simulation became nonfinite; reset required')
 
-    def add_robot(self, name):
+    def add_robot(self, name, camera_position=None):
         import mujoco
         from robo.rigs.pi05_rig import build_scene_model
         self.enable([name])
@@ -246,8 +254,24 @@ class DemoPhysics:
         # Put the base within Panda reach, on the object's estimated support height.
         rec = self.state.objects[name]
         lo = rec.meta.get('aabb', [[*target]])[0]
-        base = target + [.48, .12, 0]
-        base[2] = float(lo[2])-.04
+        direction = np.array([.48, .12, 0.])
+        if camera_position is not None:
+            direction = np.asarray(camera_position, dtype=float)-target
+            direction[2] = 0.
+            if not np.isfinite(direction).all() or np.linalg.norm(direction)<1e-6:
+                raise ValueError('Cannot place an arm from this camera position')
+        direction = direction/np.linalg.norm(direction)
+        if camera_position is not None:
+            # Offset to the side so the arm does not cover the selected object.
+            placement = getattr(self, 'placement_options', {})
+            angle = np.deg2rad(float(placement.get('angle_degrees', 50.)))
+            dx, dy = direction[:2]
+            direction[:2] = [dx*np.cos(angle)-dy*np.sin(angle), dx*np.sin(angle)+dy*np.cos(angle)]
+        # Approach from the viewer's open side of the workspace; a fixed world
+        # +X offset placed arms behind kitchen walls and inside upper cabinets.
+        placement = getattr(self, 'placement_options', {})
+        base = target + direction*float(placement.get('radius_m', .50))
+        base[2] = float(lo[2])+float(placement.get('height_offset_m', -.04))
         yaw = float(np.arctan2(target[1]-base[1], target[0]-base[0]))
         model, info = build_scene_model(self.xml, base, yaw, table_box=None, exclude_objects=())
         if self.renderer:
@@ -262,15 +286,17 @@ class DemoPhysics:
                       'base': base.tolist(), 'target': name}
         mujoco.mj_forward(model, self.data)
         self.initial = self._poses(); self.initial_qpos = self.data.qpos.copy()
-        self.robot_status = {'state': 'idle', 'base': base.tolist(), 'controller': 'scripted IK with physical contacts'}
+        self.robot_status = {'state': 'idle', 'base': base.tolist(), 'controller': 'scripted IK with physical contacts',
+                             'placement': {'method':'offset beside camera-facing direction','angle_degrees':float(placement.get('angle_degrees',50.)), 'radius_m':float(placement.get('radius_m',.5)), 'height_offset_m':float(placement.get('height_offset_m',-.04))},
+                             'mount_support_verified': False}
 
-    def command_robot(self, name, command):
+    def command_robot(self, name, command, camera_position=None):
         text = command.lower().strip()
         allowed = ('reach', 'pick', 'lift', 'place', 'move', 'push')
         if not any(word in text.split() for word in allowed):
             raise ValueError('Supported commands: reach, lift, pick/place left/right, push left/right')
         if self.robot is None or self.robot['target'] != name:
-            self.add_robot(name)
+            self.add_robot(name, camera_position=camera_position)
         self.enable([name])
         p = self.data.xpos[self.model.body(name).id].copy()
         direction = -1 if 'left' in text else 1
@@ -278,7 +304,11 @@ class DemoPhysics:
         grasp = p + [0, 0, .035]
         plan = [(above, 0), (grasp, 0)]
         if 'push' in text:
-            plan = [(p+[0, -.14*direction, .03], 0), (p+[0, .18*direction, .03], 1)]
+            push_direction = p-np.asarray(self.robot['base'])
+            push_direction[2] = 0
+            push_direction /= max(np.linalg.norm(push_direction), 1e-8)
+            push_direction *= direction
+            plan = [(p-push_direction*.14+[0,0,.03], 1), (p+push_direction*.18+[0,0,.03], 1)]
         elif any(w in text for w in ('pick', 'lift', 'place', 'move')):
             plan += [(grasp, 1), (above, 1)]
             if any(w in text for w in ('place', 'move')):
@@ -287,8 +317,9 @@ class DemoPhysics:
         self.plan = plan
         self.plan_step = self.plan_ticks = 0
         self.robot_start_z = float(p[2])
+        self.robot_start_position = p.copy()
         self.robot_status.update(state='running', command=command, stage=0, stages=len(plan),
-                                 lifted=False, max_lift_m=0., success=None)
+                                 lifted=False, max_lift_m=0., success=None, target_contact_steps=0, max_target_displacement_m=0.)
         self.running = True
 
     def _robot_control(self):
@@ -299,13 +330,19 @@ class DemoPhysics:
         result = solve_ik(self.model, self.data, 'robot/2f85/pinch', point,
                           [0, 1, 0, 0], r['qadr'], r['dadr'], iters=35, pos_tol=.015, rot_tol=.15)
         q = self.data.qpos[r['qadr']]
-        self.data.ctrl[r['aids']] = q + np.clip(result.q-q, -.08, .08)
+        previous_target = self.data.ctrl[r['aids']].copy()
+        self.data.ctrl[r['aids']] = previous_target + np.clip(result.q-previous_target, -.08, .08)
         self.data.ctrl[r['grip']] = 255 if grip else 0
         self.plan_ticks += 1
         height = float(self.data.xpos[self.model.body(r['target']).id, 2])-self.robot_start_z
         self.robot_status['max_lift_m'] = max(self.robot_status['max_lift_m'], height)
+        displacement = float(np.linalg.norm(self.data.xpos[self.model.body(r['target']).id]-self.robot_start_position))
+        self.robot_status['max_target_displacement_m'] = max(self.robot_status['max_target_displacement_m'], displacement)
         self.robot_status['lifted'] = self.robot_status['max_lift_m'] > .05
-        self.robot_status['ik_error_m'] = float(result.pos_err)
+        self.robot_status['ik_solution_error_m'] = float(result.pos_err)
+        self.robot_status['ik_error_m'] = float(np.linalg.norm(self.data.site('robot/2f85/pinch').xpos-point))
+        self.robot_status['end_effector_position'] = self.data.site('robot/2f85/pinch').xpos.tolist()
+        self.robot_status['target_position'] = self.data.xpos[self.model.body(r['target']).id].tolist()
         if self.plan_ticks >= 60:
             self.plan_step += 1; self.plan_ticks = 0
             self.robot_status['stage'] = self.plan_step

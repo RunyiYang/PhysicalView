@@ -45,14 +45,17 @@ def quality(image):
 class Capture:
     def __init__(self, args):
         self.d=Demo(args); self.root=self.d.out
-        self.rows={}; self.frames=[]
+        previous=self.root/'features.json'
+        self.rows=json.loads(previous.read_text()) if args.features and previous.exists() else {}
+        self.frames=[]
         self.paper_wh=(args.width,args.height)
-        save_json(self.root/'capture-code.json',{
+        self.capture_code={
             'source_sha256':{p.name:hashlib.sha256(p.read_bytes()).hexdigest()
-                             for p in Path(__file__).parent.glob('paper*.py')},
+                             for p in sorted(set(Path(__file__).parent.glob('paper*.py')) | set(Path(__file__).parent.glob('phiview*.py')) | set(Path(__file__).parent.glob('inpaint_surface*.py')))},
             'features':FEATURES,'source_native_resolution':self.d.native_wh,
             'export_resolution':self.paper_wh,'png_lossless':True,
-            'image_enhancement':'none','publication_review':'pending'})
+            'image_enhancement':'none','publication_review':'pending'}
+        save_json(self.root/'capture-code.json',self.capture_code)
 
     def shot(self, feature, name, extra=None):
         from PIL import Image
@@ -67,7 +70,7 @@ class Capture:
              'quality':quality(image),'state':d.status(),'qpos':d.physics.data.qpos.copy(),
              'qvel':d.physics.data.qvel.copy(),'mask_source':d.scene.mask_sources,
              'selected_bbox_xyxy':selected_bbox,'selected_visible_pixels':len(xs),
-             'publication_review':'pending','extra':extra or {}}
+             'publication_review':'pending','extra':extra or {},'capture_source_sha256':self.capture_code['source_sha256']}
         save_json(p.with_suffix('.json'),rec)
         self.frames.append(rec['file']);return image
 
@@ -164,7 +167,12 @@ class Capture:
         return best
 
     def restore(self,mode='original',highlight=False):
-        d=self.d;d.physics.reset();d.physics.enabled=set();d.camera=copy.deepcopy(self.base_camera)
+        d=self.d
+        if d.physics.robot is not None or d.physics.projectile:
+            from physicalview.phiview_sim import DemoPhysics
+            if d.physics.renderer is not None:d.physics.renderer.close()
+            d.physics=DemoPhysics(d.state,self.root)
+        d.physics.reset();d.physics.enabled=set();d.camera=copy.deepcopy(self.base_camera)
         d.wh=self.paper_wh;d.mode=mode;d.highlight=highlight
         d.selected=self.chosen['object']
 
@@ -196,20 +204,25 @@ class Capture:
 
     def capture(self):
         d=self.d
-        self.run_feature('a_original',lambda:self.original())
-        self.run_feature('b_highlight_all',lambda:self.highlights())
-        self.run_feature('c_mouse_pick',lambda:self.pick())
-        self.run_feature('d_simulatable',lambda:self.simulatable())
-        self.run_feature('e_physical_parameters',lambda:self.parameters())
-        self.run_feature('g_clean_selected',lambda:self.clean('g_clean_selected','clean_selected'))
-        self.run_feature('f2_clean_all',lambda:self.clean('f2_clean_all','clean_all'))
-        self.run_feature('i_fall_friction',lambda:{a:self.sequence('i_fall_friction',a,2.) for a in ('fall','friction')})
-        self.run_feature('j_throw',lambda:self.sequence('j_throw','throw',2.))
-        self.run_feature('k_shoot',lambda:self.shoot())
-        self.run_feature('f_generated_choices',lambda:self.variants())
-        self.run_feature('m_navigation',lambda:self.navigation())
-        self.run_feature('l_robot',lambda:self.robot())
-        self.run_feature('h_prompt_inpaint',lambda:self.prompt())
+        actions={
+            'a_original':self.original,
+            'b_highlight_all':self.highlights,
+            'c_mouse_pick':self.pick,
+            'd_simulatable':self.simulatable,
+            'e_physical_parameters':self.parameters,
+            'g_clean_selected':lambda:self.clean('g_clean_selected','clean_selected'),
+            'f2_clean_all':lambda:self.clean('f2_clean_all','clean_all'),
+            'i_fall_friction':lambda:{a:self.sequence('i_fall_friction',a,2.) for a in ('fall','friction')},
+            'j_throw':lambda:self.sequence('j_throw','throw',2.),
+            'k_shoot':self.shoot,
+            'f_generated_choices':self.variants,
+            'm_navigation':self.navigation,
+            'l_robot':self.robot,
+            'h_prompt_inpaint':self.prompt,
+        }
+        requested=set(d.args.features or FEATURES)
+        for key,action in actions.items():
+            if key in requested:self.run_feature(key,action)
         self.contact_sheet()
         save_json(self.root/'capture-complete.json',{'features':self.rows,'scene':d.args.scene,'chosen':self.chosen,
                   'publication_review':'pending','counts':{'captured':sum(r['status']=='captured' for r in self.rows.values()),'total':len(FEATURES)}})
@@ -276,9 +289,9 @@ class Capture:
     def robot(self):
         import imageio.v2 as imageio
         self.restore('simulation');d=self.d
-        d.camera.position-=d.camera.forward()*.65;d.camera.fov=max(65.,d.camera.fov)
+        d.camera.position-=d.camera.forward()*1.0;d.camera.fov=max(70.,d.camera.fov)
         self.shot('l_robot','before')
-        command='reach the object';d.execute({'op':'robot_command','command':command});self.shot('l_robot','placed',{'command':command})
+        command=d.args.robot_command;d.execute({'op':'robot_command','command':command});self.shot('l_robot','placed',{'command':command})
         q0=d.physics.data.qpos[d.physics.robot['qadr']].copy();visible=0
         writer=imageio.get_writer(self.root/'l_robot'/'reach.mp4',fps=15,codec='libx264',macro_block_size=1,quality=9)
         try:
@@ -321,11 +334,27 @@ class Capture:
         canvas.save(self.root/'contact-sheet.jpg',quality=92)
 
 
+def prepare_feature_retry(root, requested):
+    """Archive exactly the groups being replaced, retaining unrelated evidence."""
+    import shutil
+    root=Path(root)
+    if not requested or not (root/'features.json').exists():return None
+    history=root/'feature-attempts'/str(time.time_ns());history.mkdir(parents=True)
+    for filename in ('features.json','capture-complete.json','capture-code.json','manifest.json','actions.jsonl'):
+        if (root/filename).exists():shutil.copy2(root/filename,history/filename)
+    for key in requested:
+        if (root/key).exists():shutil.move(str(root/key),history/key)
+    return history
+
+
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--config',default='configs/phiview.yaml')
     ap.add_argument('--scene',required=True);ap.add_argument('--out',required=True)
     ap.add_argument('--width',type=int,default=2880);ap.add_argument('--height',type=int,default=1920)
+    ap.add_argument('--robot-command',default='reach the object')
+    ap.add_argument('--features',nargs='+',choices=list(FEATURES),help='Bounded feature retry; total remains 14 for coverage')
     ap.add_argument('--survey-only',action='store_true');args=ap.parse_args()
+    prepare_feature_retry(args.out,args.features)
     cap=Capture(args)
     saved=cap.root/'camera-survey.json'
     if not args.survey_only and saved.exists() and json.loads(saved.read_text()).get('version')==SURVEY_VERSION:

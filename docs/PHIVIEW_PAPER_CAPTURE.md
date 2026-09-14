@@ -79,3 +79,60 @@ parent allocation completed. Neither is included in the official scene/feature c
 
 Current scheduler and completion state must be read from Slurm and the per-scene
 `campaign-status.json` files; job submission alone does not establish completion.
+
+## Visual review and repair experiments (2026-09-14)
+
+The completed first scenes are **draft captures**, not approved paper figures.
+Scene `3864514494` has cup remnants in its clean backgrounds and the initial robot
+placement was hidden by cabinets. `3e8bba0176` also has background remnants and one
+registered RVG alternative with black texture defects. The bathroom scene has
+visible completion patches. Per-feature `review.json` files record these failures.
+
+The original Qwen adapter crops and composites with a mask but does not pass that
+mask to the model. Actual view inspection found preserved/moved cups instead of
+empty backgrounds. `physicalview.phiview_mask_edit` is an **experimental** runner
+that saves its actual input, localization reference/mask, raw model output, prompt,
+seed and output hash. Trials include Qwen reference/hole inputs, SDXL inpainting,
+and a recorded LaMa prefill followed by low-strength prompted SDXL refinement.
+Model inference crops may be resampled; this does not change the recorded source
+resolution or justify claims of recovered image detail. These trials have not been
+adopted as the campaign default. Their outputs are outside the official dataset
+folders, and semantic removal still requires visual review.
+
+`inpaint_surface_seeds` / `inpaint_surface_fill` are a separate experimental
+background-geometry refinement. They seed on carved scan geometry and bounded local
+plane extrapolations, train on every edited view, and report **zero held-out views**.
+Their fit PSNR is not a generalization result or a publication-quality gate.
+
+Robot placement now starts beside the current viewing direction rather than a
+fixed world axis. The mount height is estimated and support is not verified.
+`run/paper_robot_probe.py` records actual contacts, trajectories and endpoint error.
+The IK solution residual and the live end-effector tracking error are distinct:
+the kitchen arm was physically blocked by cabinets despite a small IK residual.
+The bathroom push probe produced contacts and displacement; this is neither a
+successful-grasp result nor a robot benchmark. Camera occlusion still needs review.
+Paper feature restoration rebuilds the original physics model after robot/projectile
+trials so these actors do not contaminate later feature comparisons.
+
+`--features` permits a bounded recapture; the completion denominator remains 14.
+`--robot-command` records the actual command used. Source hashes now cover the
+renderer/physics adapters as well as capture modules.
+
+Dataset transitions use `physicalview.paper_require_complete`: all ten roster
+scenes must have all fourteen captured features with existing PNGs and sidecars.
+This gate is distinct from publication review. `scheduler-chain.json` records the
+submitted ScanNet++ -> LIBERO first scene -> remaining LIBERO -> BEHAVIOR first
+scene -> remaining BEHAVIOR dependencies. A failed gate prevents later datasets
+from silently proceeding on an incomplete predecessor.
+
+A wider source-photo audit now covers 50 existing ScanNet++ factory outputs;
+`wider-source-photo-review.jpg` is explicitly a **source-photo selection aid**, not
+PhiView output. Less cluttered tabletop examples are candidates for subsequent
+replacement if the initial scene group cannot meet the requested visual quality.
+The refined cup trial under `lama-sdxl-repair/` reduced its silhouette but still
+failed novel-view visual review; its trained-view fit score must not be used to
+claim a clean reconstruction.
+
+Bounded feature retries archive the replaced feature folders and previous evidence
+under `feature-attempts/`, preserve unrelated groups, and clear stale approvals for
+changed images. Each new PNG sidecar includes the renderer/capture source hashes.

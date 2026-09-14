@@ -62,7 +62,8 @@ def main():
     ap=argparse.ArgumentParser();ap.add_argument('--root',required=True);ap.add_argument('--index',type=int,required=True)
     ap.add_argument('--dataset',default='scannetpp',choices=['scannetpp','libero','behavior'])
     args=ap.parse_args();root=Path(args.root).resolve()
-    cfg=load_config(root/('config.yaml' if args.dataset=='scannetpp' else f'{args.dataset}-config.yaml'))
+    config_path=root/('config.yaml' if args.dataset=='scannetpp' else f'{args.dataset}-config.yaml')
+    cfg=load_config(config_path)
     if args.dataset=='scannetpp':
         row=json.loads((root/'roster.json').read_text())['datasets']['scannetpp'][args.index]
     else:
@@ -81,7 +82,7 @@ def main():
             inpaint(ctx,names,'Remove the masked foreground object completely. Reconstruct the empty supporting surface with consistent texture, perspective, and lighting. Preserve the surrounding scene.',out/'clean-all-logs')
             save_json(asset/'inpaint/paper-clean-receipt.json',{'objects':names,'backend':'Qwen-Image-Edit-2511','fresh_execution':True,'fitting_iterations':1000,'visual_review':'pending'})
         studio=cfg.interpreter('studio')
-        capture_cmd=[studio,'-m','physicalview.paper_capture','--config',root/'config.yaml','--scene',row['result_set'],'--out',out]
+        capture_cmd=[studio,'-m','physicalview.paper_capture','--config',config_path,'--scene',row['result_set'],'--out',out]
         from physicalview.paper_capture import SURVEY_VERSION
         survey_file=out/'camera-survey.json'
         if not survey_file.exists() or json.loads(survey_file.read_text()).get('version')!=SURVEY_VERSION:
