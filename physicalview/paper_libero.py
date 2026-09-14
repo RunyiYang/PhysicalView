@@ -164,6 +164,15 @@ def export_native_physics(scene, asset, objects, accepted_names):
                 body.remove(joint)
             frozen.append(name)
         else:active.append(name)
+    # Discovery can omit a small or occluded native object entirely. Its splats
+    # remain in the static background, so its native free joint must also be
+    # frozen instead of moving an untracked collision body during simulation.
+    for body in tree.findall('.//body'):
+        name=body.get('name','')
+        if name in active:continue
+        joints=[j for j in body.findall('joint') if j.get('type')=='free']+body.findall('freejoint')
+        for joint in joints:body.remove(joint)
+        if joints and name not in frozen:frozen.append(name)
     if not active:raise ValueError('No accepted native bodies to simulate')
     model=mujoco.MjModel.from_xml_string(ET.tostring(tree.getroot()).decode())
     data=mujoco.MjData(model);mujoco.mj_forward(model,data)

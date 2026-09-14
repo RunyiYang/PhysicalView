@@ -72,3 +72,21 @@ def test_gallery_does_not_count_captured_flag_without_image_sidecar(tmp_path):
     rows=json.loads((tmp_path/'coverage.json').read_text())
     assert rows[0]['status']=='missing_artifacts'
     assert json.loads((tmp_path/'progress-summary.json').read_text())['datasets']['scannetpp']['captured_groups']==0
+
+
+def test_native_libero_freezes_objects_omitted_by_discovery(tmp_path):
+    import mujoco
+    from physicalview.paper_libero import export_native_physics
+    scene=tmp_path/'source';scene.mkdir();(scene/'scans').mkdir()
+    (scene/'native-scene.xml').write_text('''<mujoco><worldbody>
+      <body name="detected" pos="0 0 1"><freejoint/><geom name="a" type="box" size=".1 .1 .1"/></body>
+      <body name="omitted" pos="1 0 1"><joint type="free"/><geom name="b" type="box" size=".1 .1 .1"/></body>
+    </worldbody></mujoco>''')
+    (scene/'scans/segments_anno.json').write_text(json.dumps({'segGroups':[
+        {'objectId':1,'native_body':'detected'},{'objectId':2,'native_body':'omitted'}]}))
+    receipt=export_native_physics(scene,tmp_path/'asset',[{'index':0,'gt_object_id':1}],{'obj_00'})
+    model=mujoco.MjModel.from_xml_path(str(tmp_path/'asset/sim_export/scene.xml'))
+    assert model.nv==6
+    assert model.body('omitted').jntnum==0
+    assert receipt['frozen']==['omitted']
+    assert receipt['maximum_geom_position_error_m']==0

@@ -51,6 +51,13 @@ def run(a):
     if not objects:raise ValueError('No objects survived discovery; no replacement scene fabricated')
     if not all((asset/'objects'/f"obj_{r['index']:02d}"/'trellis_gs.ply').exists() for r in objects):
         spec=pipeline.generate(ctx,'trellis',None)
+        # A worktree may share its interpreter with the main checkout while
+        # having no copy of the untracked, vendored TRELLIS source directory.
+        candidates=([Path(os.environ['PHIVIEW_TRELLIS_ROOT'])] if os.environ.get('PHIVIEW_TRELLIS_ROOT') else
+                    [cfg.repo_root/'third_party/TRELLIS',Path(cfg.interpreter('main')).parents[2]/'third_party/TRELLIS'])
+        vendor=next((p for p in candidates if (p/'trellis/__init__.py').is_file()),None)
+        if vendor is None:raise FileNotFoundError('Vendored TRELLIS source missing; set PHIVIEW_TRELLIS_ROOT')
+        spec.env['PYTHONPATH']=os.pathsep.join([spec.env.get('PYTHONPATH',''),str(vendor)])
         if a.dataset=='behavior':spec.env['SIMANY_MESH_SRC']='derived'
         stage(spec,logs,'trellis-generation')
     if not (asset/'objects/aligned_all.json').exists():
