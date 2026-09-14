@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Click an unlabelled scene object to segment it with a SAM3 point prompt, highlight its
+  visible Gaussians, and create an approximate rigid collision body with Make simulatable.
+  New selections and collision proxies persist within the viewer session directory.
+  Default physical estimates are explicitly unmeasured; existing bodies retain their poses.
+
 - Allow shooting and object simulation before background inpainting. Original observed
   background remains available; unfilled regions are labeled and inpainted views remain gated.
 

@@ -60,6 +60,8 @@ class Demo:
         if rs is None:
             raise ValueError(f'Scene {args.scene!r} not found')
         self.state = load_scene(self.config, rs, device='cuda')
+        from physicalview.phiview_selection import ClickSelection, restore_objects
+        restore_objects(self.state, self.out)
         self.scene = GaussianScene(self.state)
         active_inpaint = self.out/'active-inpaint.json'
         if active_inpaint.exists():
@@ -78,6 +80,8 @@ class Demo:
         self.ready = False
         self.frame_id = 0
         self.frames = OrderedDict()
+        self.frame_images = OrderedDict()
+        self.click_selection = ClickSelection(self)
         self.jpeg = b''
         self.condition = threading.Condition()
         self.commands = queue.Queue(maxsize=128)
@@ -122,10 +126,12 @@ class Demo:
             objects.append({'id': name, 'label': rec.label, 'simulatable': name in self.physics.available,
                 'enabled': name in self.physics.enabled, 'variant': self.scene.variants[name],
                 'proposals': proposals, 'physics': self.physics.parameters(name),
+                'interactive': bool(rec.meta.get('interactive')),
                 'mask_source': self.scene.mask_sources[name]})
         return {'ready': self.ready, 'scene': self.args.scene, 'objects': objects,
                 'selected': self.selected, 'mode': self.mode, 'highlight': self.highlight,
                 'background_completion': self.scene.clean is not None,
+                'selection': self.click_selection.status,
                 'frame': self.frame_id, 'render_ms': round(self.last_render_s*1000, 1),
                 'resolution': self.wh, 'native_resolution': self.native_wh,
                 'gaussians': self.scene.count, 'gpu': self.manifest['hardware'],
@@ -166,7 +172,11 @@ class Demo:
                 raise ValueError('Click outside image')
             x, y = int(u*mask.shape[1]), int(v*mask.shape[0])
             if op == 'pick':
-                i = int(mask[y, x]); self.selected = self.scene.names[i-1] if i else None
+                i = int(mask[y, x])
+                if i:
+                    self.selected = self.scene.names[i-1]
+                else:
+                    self.click_selection.start(fid, x, y)
             else:
                 self.mode = 'simulation'
                 c2w = np.linalg.inv(w2c)
@@ -187,6 +197,11 @@ class Demo:
             self.highlight = bool(msg.get('value', True))
         elif op == 'enable':
             names = self.physics.available if msg.get('all') else [self.selected_required()]
+            for name in names:
+                if name not in self.physics.available:
+                    from physicalview.phiview_proxy import install_proxy
+                    points = self.scene.raw['means'][self.scene.indices[name]].detach().cpu().numpy()
+                    install_proxy(self.physics, name, points, self.out/'interactive_objects'/name)
             self.physics.enable(names); self.mode = 'simulation'
         elif op in ('fall', 'friction', 'throw'):
             self.physics.perturb(self.selected_required(), op, self.camera.forward(), msg.get('strength', 3))
@@ -254,6 +269,8 @@ class Demo:
         return {'ok': True, 'selected': self.selected}
 
     def launch_pipeline(self, msg):
+        if self.click_selection.busy:
+            raise ValueError('Wait for object selection to finish')
         if self.pipeline_thread and self.pipeline_thread.is_alive():
             raise ValueError('A scene build is already running')
         if msg['op'] in ('generate', 'build') or (msg['op'] == 'inpaint' and not msg.get('all')):
@@ -378,13 +395,16 @@ class Demo:
             image = self.physics.overlay(image, depth, w2c, K)
             if self.physics.overlay_mask is not None:
                 mask[self.physics.overlay_mask] = 0
+                depth[self.physics.overlay_mask] = 0
         buf = io.BytesIO(); Image.fromarray(image).save(buf, format='JPEG', quality=92)
         self.last_render_s = time.monotonic()-t0
         with self.condition:
             self.frame_id += 1
             self.frames[self.frame_id] = (mask, depth, w2c, K)
+            self.frame_images[self.frame_id] = self.scene.last_rgb
             while len(self.frames) > 8:
-                self.frames.popitem(last=False)
+                old, _ = self.frames.popitem(last=False)
+                self.frame_images.pop(old, None)
             self.jpeg = buf.getvalue()
             self.ready = True; self.frame_error = None
             self.condition.notify_all()
@@ -414,6 +434,7 @@ class Demo:
             try:
                 if self.reload_pending:
                     self.reload_build()
+                self.click_selection.finish()
                 if start-self.last_input > .35:
                     self.keys = []
                 moving = bool(self.keys) or bool(np.any(self.look))

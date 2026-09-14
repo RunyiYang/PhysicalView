@@ -65,11 +65,13 @@ class GaussianScene:
         self.indices = {}
         for n in self.names:
             path = state.result_set.out_dir/'inpaint'/n/'removal_idx.npy'
+            if state.objects[n].meta.get('interactive'):
+                path = state.objects[n].dir/'gaussian_indices.npy'
             if path.exists():
                 idx = np.asarray(np.load(path), dtype=np.int64)
                 if idx.ndim != 1 or (idx.size and (idx.min() < 0 or idx.max() >= len(self.labels))):
                     raise ValueError(f'Invalid Gaussian mask: {path}')
-                self.mask_sources[n] = 'cached removal mask'
+                self.mask_sources[n] = state.objects[n].meta.get('mask_source', 'cached removal mask')
                 idx = torch.as_tensor(idx, device='cuda')
             else:
                 box = state.objects[n].meta.get('aabb')
@@ -92,8 +94,26 @@ class GaussianScene:
             self.removed[torch.as_tensor(np.load(union).astype(np.int64), device='cuda')] = True
         else:
             self.removed = self.labels > 0
+        if any(rec.meta.get('interactive') for rec in state.objects.values()):
+            self.removed |= self.labels > 0
+            self.clean = None
         self.count = len(self.labels)
         self.prompt_backgrounds = {}
+
+    def add_object(self, name, indices, source):
+        if name in self.ids:
+            raise ValueError('Object already registered')
+        self.names.append(name)
+        self.ids[name] = len(self.names)
+        self.indices[name] = indices
+        self.labels[indices] = self.ids[name]
+        self.removed[indices] = True
+        self.mask_sources[name] = source
+        self.variants[name] = 'original'
+        # Previous background products did not remove this newly discovered object.
+        self.clean = None
+        self.state.clean_bg_gs = None
+        self.prompt_backgrounds.clear()
 
     def choose(self, name, source):
         if source == 'original':
@@ -177,6 +197,7 @@ class GaussianScene:
             confidence, ids = out[0].max(-1)
             ids[confidence < .25] = 0
             mask = ids.cpu().numpy().astype(np.uint16)
+        self.last_rgb = (np.clip(rgb, 0, 1)*255+.5).astype(np.uint8)
         if highlight:
             from physicalview.highlight import highlight_objects
             rgb = highlight_objects(rgb, mask, self.ids.get(selected))
