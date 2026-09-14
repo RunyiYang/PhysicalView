@@ -30,15 +30,21 @@ among viewers. Job duration defaults to four hours. Files persist after the job 
 - WASD moves relative to the view; Q/E moves vertically. Shift triples speed. Right-drag
   rotates without roll; pitch stops short of the poles. The speed slider adjusts travel.
   F focuses the selected object. Inputs stop on window blur or a 350 ms heartbeat timeout.
-- Click an outlined object, or choose it in the object list. Selected outlines are amber;
-  other discovered objects are teal. Picking uses the membership raster for the displayed
-  frame, including occlusion. Expired frame clicks return an error rather than selecting
-  something at a newer camera pose.
-- Original displays only the original splats. Simulatable displays the inpainted background
-  plus original or chosen generated object appearance. Native restores the capture resolution.
-- Make simulatable enables a constructed collision body. Build physics invokes registration,
-  physics annotation and room collision export in a new writable build. Unsupported objects
-  remain disabled until their body exists.
+- Click any reconstructed object, or choose a known object in the object list. Known
+  regions select immediately. An unlabelled region runs a SAM3 positive point prompt on
+  the displayed frame, then lifts its visible surface to unassigned original Gaussians.
+  It appears as a new clicked object with a red mask and white outline. Wait for selection
+  to finish, then click **Make simulatable**. Expired frames and invalid surfaces are rejected.
+- Original displays the original splats. Simulatable uses an inpainted background when
+  available, otherwise the observed original background with exposed regions left unfilled.
+  Native restores the capture resolution.
+- Make simulatable enables an existing body or builds a convex collision proxy from
+  the selected Gaussian centers. New proxies use default density (500 kg/m³) and friction,
+  explicitly marked unmeasured in the physical parameters. The proxy approximates a
+  partial observed surface; it does not reconstruct hidden geometry or infer a material.
+  Existing bodies keep their current poses and reset poses. Create new bodies before
+  placing a robot. Original proposals still support the full Build physics pipeline;
+  clicked objects use the interactive proxy builder.
 - Physical parameters show the active MuJoCo mass, inertia and friction alongside the source
   estimate. Friction edits affect the selected body's collision geoms. Fall raises the body
   0.3 m and releases it; Friction gives it 0.7 m/s horizontal velocity; Throw gives it the
@@ -63,6 +69,16 @@ among viewers. Job duration defaults to four hours. Files persist after the job 
   completion is labelled as grasp or task success.
 
 ## Environment
+
+Click discovery uses the configured `sam3` interpreter and a locally cached
+`facebook/sam3` checkpoint. Set `PHIVIEW_SAM3_CHECKPOINT` to use an explicit checkpoint.
+Inference runs in a separate server process; the browser continues receiving images.
+The session output stores `clicks/` (actual input RGB, depth, camera, mask and inference
+receipt) and `interactive_objects/` (Gaussian indices, selection metadata and collision
+proxy). Reopening the same scene and output directory restores these objects. Source
+scene artifacts are never edited. New object discovery invalidates prior background
+completion for the changed removal set. Asset generation for clicked objects is not
+enabled until generation inputs are prepared.
 
 `configs/phiview.yaml` uses the shared Studio CUDA environment for rendering, the original
 SimAny environments for generation, and `run/phiview_inference_python.sh` for SAM3 and Qwen.

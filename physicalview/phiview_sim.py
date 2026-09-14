@@ -19,6 +19,11 @@ class DemoPhysics:
             if meshdir and not meshdir.startswith('/'):
                 compiler.set('meshdir', str(state.scene_xml.parent/meshdir))
         world = root.find('worldbody')
+        from physicalview.phiview_proxy import append_proxy
+        for name, rec in state.objects.items():
+            proxy = rec.meta.get('interactive_proxy') if hasattr(rec, 'meta') else None
+            if proxy:
+                append_proxy(root.getroot(), name, proxy)
         # A bounded pool of real collision projectiles; inactive ones have collisions off.
         for i in range(8):
             b = ET.SubElement(world, 'body', name=f'phiview_ball_{i}', pos=f'0 0 {-20-i}')
