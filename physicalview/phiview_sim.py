@@ -231,8 +231,8 @@ class DemoPhysics:
                     ba = m.body(int(m.geom_bodyid[c.geom1])).name or ''
                     bb = m.body(int(m.geom_bodyid[c.geom2])).name or ''
                     target = self.robot['target']
-                    if ((ba.startswith('robot/') and bb == target) or
-                        (bb.startswith('robot/') and ba == target)):
+                    if ((ba.startswith('robot/') and ba != 'robot/pedestal' and bb == target) or
+                        (bb.startswith('robot/') and bb != 'robot/pedestal' and ba == target)):
                         self.robot_status['target_contact_steps'] = self.robot_status.get('target_contact_steps', 0)+1
                         self.robot_status['last_target_contact'] = {'time':float(d.time),'bodies':[ba,bb], 'position':c.pos.tolist()}
                 if a.startswith('phiview_ball') or b.startswith('phiview_ball'):
@@ -273,7 +273,17 @@ class DemoPhysics:
         base = target + direction*float(placement.get('radius_m', .50))
         base[2] = float(lo[2])+float(placement.get('height_offset_m', -.04))
         yaw = float(np.arctan2(target[1]-base[1], target[0]-base[0]))
-        model, info = build_scene_model(self.xml, base, yaw, table_box=None, exclude_objects=())
+        source_xml=self.xml
+        pedestal_bottom=placement.get('pedestal_bottom_z')
+        if pedestal_bottom is not None:
+            height=base[2]-float(pedestal_bottom)
+            if not .05<=height<=1.5:raise ValueError('Pedestal height outside the supported range')
+            root=ET.parse(self.xml);world=root.find('worldbody')
+            stand=ET.SubElement(world,'body',name='robot/pedestal',pos=f'{base[0]} {base[1]} {float(pedestal_bottom)+height/2}')
+            ET.SubElement(stand,'geom',name='robot/pedestal',type='box',size=f'.12 .12 {height/2}',
+                          rgba='.25 .3 .35 1',friction='.8 .005 .0001',contype='1',conaffinity='1')
+            source_xml=self.out/'robot_mount_scene.xml';root.write(source_xml)
+        model, info = build_scene_model(source_xml, base, yaw, table_box=None, exclude_objects=())
         if self.renderer:
             self.renderer.close(); self.renderer = None
         self.model, self.data = model, mujoco.MjData(model)
@@ -289,6 +299,9 @@ class DemoPhysics:
         self.robot_status = {'state': 'idle', 'base': base.tolist(), 'controller': 'scripted IK with physical contacts',
                              'placement': {'method':'offset beside camera-facing direction','angle_degrees':float(placement.get('angle_degrees',50.)), 'radius_m':float(placement.get('radius_m',.5)), 'height_offset_m':float(placement.get('height_offset_m',-.04))},
                              'mount_support_verified': False}
+        if pedestal_bottom is not None:
+            self.robot_status['pedestal']={'bottom_z':float(pedestal_bottom),'top_z':float(base[2]),'half_width_m':.12,
+                                           'source':'Inserted static MuJoCo mount; support extent still requires validation'}
 
     def command_robot(self, name, command, camera_position=None):
         text = command.lower().strip()

@@ -51,3 +51,24 @@ def test_behavior_capture_does_not_fuse_different_object_states_or_episodes():
     assert report['selected_episode']=='a'
     assert report['selected_camera_frames']==4
     assert report['episodes'][0]['audit'][2]['kept'] is False
+
+
+def test_behavior_reference_uses_numeric_clip_time():
+    import numpy as np
+    from physicalview.paper_behavior import select_consistent_clips
+    clips=[{'ep':'episode','clip_id':f'episode-{t}:{t+11}','D':np.eye(4),'cam_frames':[{}],
+            'traj':{n:np.array([[0,0,0,0,0,0,1]]) for n in ('floor','wall','table')}} for t in (1000,200)]
+    _,report=select_consistent_clips(clips,lambda _:np.eye(4))
+    assert report['reference_clip']=='episode-200:211'
+
+
+def test_gallery_does_not_count_captured_flag_without_image_sidecar(tmp_path):
+    from PIL import Image
+    from physicalview.paper_pack import main
+    scene=tmp_path/'scannetpp'/'scene';feature=scene/'a_original';feature.mkdir(parents=True)
+    Image.new('RGB',(32,24)).save(feature/'frame.png')
+    (scene/'features.json').write_text(json.dumps({'a_original':{'status':'captured','frames':['a_original/frame.png']}}))
+    main(['--root',str(tmp_path)])
+    rows=json.loads((tmp_path/'coverage.json').read_text())
+    assert rows[0]['status']=='missing_artifacts'
+    assert json.loads((tmp_path/'progress-summary.json').read_text())['datasets']['scannetpp']['captured_groups']==0

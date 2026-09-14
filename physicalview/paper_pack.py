@@ -1,5 +1,5 @@
 """Build a review gallery and editable SVG panels without modifying scene pixels."""
-import argparse,base64,csv,html,json,math
+import argparse,base64,csv,html,json,math,time
 from pathlib import Path
 from PIL import Image
 from physicalview.paper_capture import FEATURES
@@ -55,24 +55,40 @@ def panel(folder,feature,paths,sidecar):
         'review_preview_only':'review-preview.jpg'},indent=2))
 
 
-def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--root',required=True);a=ap.parse_args();root=Path(a.root).resolve();rows=[];cards=[]
+def main(argv=None):
+    ap=argparse.ArgumentParser();ap.add_argument('--root',required=True);a=ap.parse_args(argv);root=Path(a.root).resolve();rows=[];cards=[]
+    import fcntl
+    lock=(root/'.paper-pack.lock').open('a')
+    fcntl.flock(lock,fcntl.LOCK_EX)
     for dataset in ['scannetpp','libero','behavior']:
         for scene in sorted((root/dataset).glob('*')):
             if not scene.is_dir():continue
             file=scene/'features.json';features=json.loads(file.read_text()) if file.exists() else {}
             for key,title in FEATURES.items():
                 row=features.get(key,{'status':'not_run','frames':[]})
-                paths=[scene/p for p in row.get('frames',[]) if (scene/p).exists()]
+                expected=row.get('frames',[])
+                paths=[scene/p for p in expected if (scene/p).is_file() and (scene/p).with_suffix('.json').is_file()]
+                status=row['status']
+                if status=='captured' and (not paths or len(paths)!=len(expected)):
+                    status='missing_artifacts'
                 review_path=scene/key/'review.json'
                 review=json.loads(review_path.read_text()) if review_path.exists() else {'status':'pending'}
-                rows.append({'dataset':dataset,'scene':scene.name,'feature':key,'status':row['status'],'pngs':len(paths),'review':review['status'],'error':row.get('error','')})
-                if paths:
+                rows.append({'dataset':dataset,'scene':scene.name,'feature':key,'status':status,'pngs':len(paths),'review':review['status'],'error':row.get('error','')})
+                if paths and len(paths)==len(expected) and (key!='e_physical_parameters' or (scene/key/'parameters.json').is_file()):
                     side=json.loads(paths[0].with_suffix('.json').read_text());panel(scene/key,key,paths,side)
                     link=(scene/key/'panel.svg').relative_to(root)
                     preview=(scene/key/'review-preview.jpg').relative_to(root)
-                    cards.append(f'<article data-dataset="{dataset}" data-feature="{key}"><h2>{dataset} / {scene.name} / {key}</h2><p>{html.escape(title)} · {row["status"]} · publication review: {html.escape(review["status"])}</p><a href="{link}"><img loading="lazy" src="{preview}"></a><p><a href="{link}">Editable SVG with lossless source PNGs</a> · <a href="{scene.relative_to(root)}/features.json">Evidence</a> · <a href="{scene.relative_to(root)}/{key}/">Lossless PNG and sidecars</a></p></article>')
+                    cards.append(f'<article data-dataset="{dataset}" data-feature="{key}"><h2>{dataset} / {scene.name} / {key}</h2><p>{html.escape(title)} · {status} · publication review: {html.escape(review["status"])}</p><a href="{link}"><img loading="lazy" src="{preview}"></a><p><a href="{link}">Editable SVG with lossless source PNGs</a> · <a href="{scene.relative_to(root)}/features.json">Evidence</a> · <a href="{scene.relative_to(root)}/{key}/">Lossless PNG and sidecars</a></p></article>')
     save_json(root/'coverage.json',rows)
+    summary={'updated_utc':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),
+             'requested_groups':len(rows),'datasets':{},'quality_status':'Capture and publication review are separate; pending/needs_work groups are not paper-approved.'}
+    for dataset in ('scannetpp','libero','behavior'):
+        subset=[r for r in rows if r['dataset']==dataset];scenes=set(r['scene'] for r in subset)
+        summary['datasets'][dataset]={'captured_groups':sum(r['status']=='captured' for r in subset),
+            'feature_pngs':sum(r['pngs'] for r in subset),
+            'approved_groups':sum(r['status']=='captured' and r['review']=='approved' for r in subset),
+            'complete_scenes':sum(all(r['status']=='captured' for r in subset if r['scene']==scene) for scene in scenes)}
+    save_json(root/'progress-summary.json',summary)
     with (root/'coverage.csv').open('w') as f:
         w=csv.DictWriter(f,fieldnames=['dataset','scene','feature','status','pngs','review','error']);w.writeheader();w.writerows(rows)
     doc='''<!doctype html><meta charset="utf-8"><title>PhiView paper figure review</title><style>body{font-family:system-ui;margin:40px;background:#f4f6f9;color:#152238}header{position:sticky;top:0;background:white;padding:16px;z-index:2}article{background:white;padding:20px;margin:24px 0;border-radius:10px}h2{font-size:18px}img{width:100%;height:auto}select{padding:8px;margin:8px}p{color:#475569}</style><header><h1>PhiView — paper figure review</h1><p>Actual renders and simulation states. Captured does not mean approved for publication. See evidence for source resolution and model/GT provenance.</p><select id="dataset"><option value="">All datasets</option><option>scannetpp</option><option>libero</option><option>behavior</option></select><select id="feature"><option value="">All features</option>'''
@@ -80,5 +96,12 @@ def main():
     doc+='''<script>function filter(){document.querySelectorAll('article').forEach(a=>a.hidden=(dataset.value&&a.dataset.dataset!==dataset.value)||(feature.value&&a.dataset.feature!==feature.value))}dataset.onchange=feature.onchange=filter;</script>'''
     (root/'gallery.html').write_text(doc)
     print(json.dumps({'scene_feature_rows':len(rows),'captured':sum(r['status']=='captured' for r in rows),'review_approved':sum(r['review']=='approved' for r in rows)}))
+
+
+def refresh(root):
+    """Update review artifacts without masking the capture process exit status."""
+    try:main(['--root',str(root)])
+    except Exception as exc:
+        print(f'Paper gallery refresh failed (capture evidence retained): {exc}',flush=True)
 
 if __name__=='__main__':main()

@@ -9,7 +9,15 @@ from physicalview.phiview import save_json
 
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--root',required=True);ap.add_argument('--index',type=int,required=True);ap.add_argument('--dataset',choices=['libero','behavior'],required=True)
-    a=ap.parse_args();root=Path(a.root).resolve();cfg=load_config(root/f'{a.dataset}-config.yaml')
+    a=ap.parse_args()
+    try:run(a)
+    finally:
+        from physicalview.paper_pack import refresh
+        refresh(Path(a.root).resolve())
+
+
+def run(a):
+    root=Path(a.root).resolve();cfg=load_config(root/f'{a.dataset}-config.yaml')
     row=json.loads((root/f'{a.dataset}-roster.json').read_text())[a.index];sid=row['scene'];out=root/a.dataset/sid;logs=out/'construction-logs';logs.mkdir(parents=True,exist_ok=True)
     scene=cfg.scannetpp_root/'data'/sid;asset=cfg.outputs_root/(sid+'_factory');asset.mkdir(parents=True,exist_ok=True)
     ctx=pipeline.StageContext(cfg,sid,asset,auto=a.dataset=='behavior',scene_dir=scene)
@@ -17,8 +25,8 @@ def main():
         if not (scene/'native-capture.json').exists():
             run_command([cfg.interpreter('studio'),'-m','physicalview.paper_libero','--roster',root/'libero-roster.json','--index',a.index,'--root',cfg.scannetpp_root],{},cfg.package_root,logs,'native-capture')
     else:
-        if not (scene/'dslr/colmap/images.txt').exists():
-            run_command([cfg.interpreter('main'),'-m','physicalview.paper_behavior','--task',row['task'],'--scene-name',sid,'--root',cfg.scannetpp_root,'--episodes',6,'--max-frames',120,'--tasks-config',root/'behavior-tasks.yaml'],{},cfg.repo_root,logs,'wds-extract')
+        if not all((scene/path).is_file() for path in ('dslr/colmap/images.txt','paper-source-resolution.json','pose-selection.json')):
+            run_command([cfg.interpreter('main'),'-m','physicalview.paper_behavior','--task',row['task'],'--scene-name',sid,'--root',cfg.scannetpp_root,'--episodes',40,'--max-frames',120,'--tasks-config',root/'behavior-tasks.yaml'],{},cfg.repo_root,logs,'wds-extract')
         calibration=json.loads((scene/'dslr/nerfstudio/transforms_undistorted.json').read_text())
         scale=calibration['h']/1168.
         os.environ['SIMANY_MIN_BBOX_PX']=str(max(6,round(48*scale)))

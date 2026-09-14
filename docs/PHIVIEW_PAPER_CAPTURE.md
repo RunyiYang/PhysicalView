@@ -192,3 +192,37 @@ Paper panels keep fall and friction in separate rows and include all eight
 navigation frames. The gallery uses lightweight review JPEGs; the editable SVGs
 still embed the unchanged lossless PNG files. `panel-layout.json` records which
 frames appear in each panel.
+
+BEHAVIOR source preparation now searches 40 unique episodes across up to four
+rank shards at the hinted shard index. Clips from one episode are distributed
+across these files; the earlier single-shard route omitted usable observations.
+WDS contains initial RGB/depth images, not RGB video. A clip with later object
+motion may still contribute its initial image if its measured initial object
+poses pass the same-state checks. References are considered in numeric time order;
+the state with the most compatible observations within one episode is selected
+before reconstruction. Thresholds remain 2 cm / 5 degrees on shared meshes, with
+at least three shared meshes and eight image views. Duplicate clip IDs are removed.
+The upstream log counts episode/shard pairs; `pose-selection.json` instead records
+the unique episode search and the single selected episode. Initial CPU checks of
+the four-shard route produced 52 views for task 0002 and 68 for task 0011, still at
+320×180. These are prepared inputs, not completed PhiView feature captures.
+Earlier failed source attempts and replaced source directories are archived.
+The completed CPU preparation now covers all ten selected tasks with 400 native
+images (52, 68, 24, 32, 56, 52, 16, 16, 12, 72 in roster order).
+`behavior-source-verification.json` verifies every prepared JPEG byte-for-byte
+against its original WDS entry and checks that every image has a finite, proper
+camera transform. This input evidence still gives zero completed feature groups.
+
+`run/paper_robot_search.py` is a bounded simulator placement diagnostic. It retains
+all candidates and compares each against the same assembled model/integrator with
+arm contacts and commands disabled. A prior control used the original scene model
+with different simulation options and is explicitly marked invalid for causal
+displacement. The matched kitchen search simulated 15 of 18 positions; none passed
+its contact/push/initial-collision checks. An optional static pedestal is a real
+collision/rendering body used only by these experiments, not a validated automatic
+placement policy. Stand contacts are excluded from arm-target contact counts.
+No successful manipulation claim follows from these diagnostics.
+
+Foreign-dataset and recapture jobs refresh the gallery on exit. A file lock
+serializes concurrent packers, and missing PNGs/sidecars cannot count as captured
+in `progress-summary.json`. Publication approval remains a separate review.

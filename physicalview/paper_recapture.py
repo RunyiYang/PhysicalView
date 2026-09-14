@@ -29,6 +29,8 @@ def main():
         status.update(state='failed',error=str(e));raise
     finally:
         status['ended']=time.time();save_json(out/'recapture-status.json',status)
+        from physicalview.paper_pack import refresh
+        refresh(root)
 
 
 if __name__=='__main__':main()
