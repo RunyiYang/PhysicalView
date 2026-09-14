@@ -1,101 +1,144 @@
-# PhysicalView
+# PhysicalView · PhiView
 
-**PhiView demo:** a separate, strictly image-only browser viewport with full Gaussian
-rendering, visibility-aware picking/highlights, physics interactions, generated alternatives,
-prompted inpainting and robot commands. Run `sbatch run/phiview.sbatch` for the H200 demo.
-See [PhiView setup, controls and validation](docs/PHIVIEW.md). The existing viser studio
-below remains available.
+[![CI](https://github.com/RunyiYang/PhysicalView/actions/workflows/ci.yml/badge.svg)](https://github.com/RunyiYang/PhysicalView/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)](pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Interactive, GPU-backed web studio (viser) for the **SimAny real-to-sim pipeline**: load a
-scanned room, discover objects, generate 3D assets with a chosen model, register them with a
-chosen registration mode, annotate physics, inpaint a chosen region with a text prompt, export
-the simulator, and drive a Franka arm with a chosen policy on a chosen task while watching
-synchronized MuJoCo and photoreal views.
+**A server-rendered interface for turning observed scenes into interactive simulations.**
+PhiView keeps Gaussian rendering, object selection, scene construction and simulation on
+the server. Its browser viewport receives images and sends controls. PhysicalView also
+includes the original viser studio for inspecting and editing the construction pipeline.
 
-Runs on any GPU node of the cluster: **RTX A6000, A100-80GB, H200, RTX PRO 6000 Blackwell**
-(one CUDA 12.8 environment, gsplat compiled for sm_80/86/90/120). Heavy model stages keep their
-own SimAny environments and are dispatched as local or Slurm jobs automatically.
+Load the original Gaussian scene, inspect discovered objects and their physical parameters,
+choose generated alternatives, edit the background with a prompt, and interact through
+fall/friction tests, throws, projectiles and a robot arm. Paper tools retain original PNGs,
+camera/state receipts, editable SVG panels and downloadable offline galleries.
 
-## Layout
-
+```mermaid
+flowchart LR
+    D[Dataset observations] --> R[Gaussian reconstruction]
+    R --> O[Object discovery]
+    O --> G[Asset generation]
+    G --> A[Registration and physics]
+    A --> S[MuJoCo simulation]
+    R --> I[Prompted background editing]
+    I --> V[GPU rendering]
+    S --> V
+    S --> B[Robot commands]
+    B --> S
+    V --> W[PhiView image stream]
+    V --> P[Paper captures and offline ZIP]
 ```
-physicalview/         the app (app.py entry, config, gpu, jobs, pipeline, scene_state, splats,
-                      render, ik, robot, smoke) and panels/ (Scene, Generate, Inpaint, Robot, Jobs)
-configs/default.yaml  environments, Slurm GPU targets, model registries, simany_root
-run/                  setup_env.sh env.sh launch.sh studio.sbatch selftest_gpu.py selftest_all_gpus.sh
-docs/                 ARCHITECTURE.md STATUS.md ENV.md
-tests/                CPU unit tests (EGL/GPU tests skip without a GPU)
-```
 
-PhysicalView depends at runtime on a **SimAny checkout** (`agents/`, `robo/`, `models/`,
-`third_party/mujoco_menagerie`, the pipeline stage scripts). Point `simany_root` in
-`configs/default.yaml` (or `$SIMANY_ROOT`) at it. The stage scripts need the Studio CLI flags
-(`--objects`, `--source-up`, inpainting `--prompt/--backend/--region-box`, ...) that live on the
-SimAny branch `feature/studio-ui` until merged.
+## Start with uv
 
-## Install
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then:
 
 ```bash
-git clone git@github.com:RunyiYang/PhysicalView.git && cd PhysicalView
-bash run/setup_env.sh          # uv venv (py3.11) + torch 2.9.1+cu128 + viser/mujoco/gsplat ...
-# on a GPU node the script also JIT-builds gsplat for 8.0;8.6;9.0;12.0 into .envs/studio/torch_extensions
-bash run/selftest_all_gpus.sh  # optional: PASS/FAIL matrix on all four GPU types
+git clone git@github.com:RunyiYang/PhysicalView.git
+cd PhysicalView
+uv sync --locked
+uv run physicalview --version
+uv run physicalview blocks
+uv run physicalview doctor --profile cpu
+uv run pytest -q
 ```
 
-On this cluster the built env already exists; `.envs/studio` may simply be a symlink to it.
-
-## Launch
+This installs the CLI and CPU development environment. GPU rendering and construction
+use independent locked environments, so TRELLIS and modern inference can use their
+respective PyTorch versions. See [environment profiles](envs/README.md).
 
 ```bash
-# batch job (GPU type chosen at submit time; log prints the ssh tunnel line)
-sbatch run/studio.sbatch                                                          # A6000 (debug)
-sbatch --partition=batch --gres=gpu:h200:1 --exclude=msp3-[0-7] run/studio.sbatch # H200
-sbatch --partition=batch --gres=gpu:a100-80g:1 run/studio.sbatch                  # A100
-sbatch --partition=batch --gres=gpu:rtx6000:1 -w gcp-eu1-rtx6000-vz3w run/studio.sbatch
-PORT=8081 sbatch run/studio.sbatch                                                # custom port
-STUDIO_ARGS="--scene droid_iris_mon_apr_17_16_03_25_2023" sbatch run/studio.sbatch  # open on a scene
-tail -f outputs/logs/studio_<jobid>.log
-
-# interactive
-bash run/launch.sh --gpu a6000|h200|a100|rtx6000 [--port 8080]
-
-# from your laptop
-ssh -L 8080:<node>:8080 <login-host>     ->  http://localhost:8080
+bash tools/env/sync.sh studio
+bash tools/env/sync.sh inference
+bash tools/env/sync.sh generation
 ```
 
-Headless end-to-end check (no browser): `source run/env.sh && $STUDIO_PY -m physicalview.smoke`.
+Full operation requires access to the separate **SimAny/PhiRoom backend**, licensed input
+data and model weights. Sources are pinned in [sources.json](tools/backends/sources.json).
+The bootstrap preserves existing checkouts and refuses to overwrite changes:
 
-## Tabs
+```bash
+uv run python tools/backends/bootstrap.py simany trellis menagerie
+uv run physicalview init --simany-root backends/simany --data-root /path/to/scannetpp --splats-root /path/to/splats
+uv run physicalview doctor --profile studio --config configs/local.yaml
+```
 
-* **Scene** — pick any result set (ScanNet++ factory/auto/full, DROID, phone video, BEHAVIOR)
-  with the **dataset** filter (`all` / `behavior` / `droid` / `video` / `factory` / ...) narrowing
-  the alphabetically sorted result-set list; `--scene <name>` preselects one and loads it at
-  startup, so the first browser to connect already sees the scene. Then:
-  layers (raw / clean background, mesh, object splats, collision), object table, selection and
-  gizmos, camera snap, photoreal snapshot. **Display mode**: *Server render* (default) renders
-  the view on the GPU with gsplat and streams JPEG frames as the viewer background, so the
-  browser holds no splat data (JPEG quality and 720p/1080p/native controls; the robot is
-  composited in); *Client splats* uploads capped splat arrays to WebGL (high browser memory).
-* **Generate** — discovery model (GT segments / SAM3 auto), generation model (TRELLIS,
-  ReconViaGen, SAM 3D Objects, evidence-gated hybrid), registration mode (yaw-sweep ICP, signed /
-  alternative source-up), per-object generate / register / physics, drop-test report, MJCF export
-  (full-room or shim collision), task generation, full pipeline; proposal cards with
-  construction-time evidence and "Accept proposal".
-* **Inpaint** — region = selected object or a draggable 3D box; text prompt + negative prompt;
-  backend Qwen-Image-Edit or LaMa; refine iterations; versioned clean backgrounds (before/after).
-* **Robot** — pick or author a task (target + receptacle/region + instruction); policy
-  (pi0.5 DROID, pi0.5 sim-cotrained, scripted); start/check the policy server; raster or
-  photoreal-composite observations; run/stop an episode with the grasp·lift·hover·place stage
-  bar; 7 joint sliders + gripper; end-effector gizmo driven by damped-least-squares IK; robot
-  geoms live in the 3D view (client mode) or are composited into the server render stream.
-* **Jobs** — every stage is a job (local when the node's GPU supports that stage's env,
-  otherwise `srun` to a compatible GPU type), live logs, cancel, GPU compatibility matrix.
+Configure constructed scene outputs and external environment paths in `configs/local.yaml`.
+CUDA native extensions and weights are additional prerequisites; `doctor` checks
+paths/metadata, not model inference. The backend has its own contribution history and
+access requirements.
 
-## Verified
+## Run a block
 
-See docs/STATUS.md: headless smoke ALL PASS on hala (A6000) and gcp-eu1-rtx6000-vz3w
-(RTX PRO 6000 Blackwell); env self-tests PASS on A100-80GB and H200.
+Use `plan` to inspect the exact commands, then `run` to execute them and save job receipts.
+Stages run sequentially and stop when a stage or a declared artifact check fails.
 
-## License
+```bash
+uv run physicalview plan discovery --config configs/local.yaml --scene ROOM --model sam3_auto
+uv run physicalview run discovery --config configs/local.yaml --scene ROOM --model sam3_auto
+uv run physicalview run viewer --config configs/local.yaml --scene ROOM_factory
+```
 
-MIT (code). Model weights and third-party pipelines keep their own licenses.
+The viewer opens the PhiView demo on `127.0.0.1:8095`. For a remote GPU node, use an SSH
+tunnel or your site's authenticated proxy. The [controls guide](docs/PHIVIEW.md) covers
+WASDQE, mouse look, picking and simulation. `--action studio` opens the original viser
+application. Only the PhiView demo enforces the image-only browser contract; the studio
+still offers its existing optional client-splat inspection mode.
+
+| Block | Tools / contribution | Branch | Calls and contract |
+|---|---|---|---|
+| Viewer | gsplat, image streaming, picking, navigation | `block/viewer` | [viewer](pipelines/viewer/README.md) |
+| Datasets | ScanNet++, native LIBERO, BEHAVIOR WDS, DROID | `block/datasets` | [datasets](pipelines/datasets/README.md) |
+| Reconstruction | posed RGB-D to 3D Gaussians | `block/reconstruction` | [reconstruction](pipelines/reconstruction/README.md) |
+| Discovery | SAM3 proposals or annotated segments | `block/discovery` | [discovery](pipelines/discovery/README.md) |
+| Generation | TRELLIS, ReconViaGen, SAM 3D adapters | `block/generation` | [generation](pipelines/generation/README.md) |
+| Registration | scale/orientation alignment and ICP | `block/registration` | [registration](pipelines/registration/README.md) |
+| Inpainting | Qwen image editing and Gaussian refinement | `block/inpainting` | [inpainting](pipelines/inpainting/README.md) |
+| Simulation | physical parameters, collisions, MJCF, interactions | `block/simulation` | [simulation](pipelines/simulation/README.md) |
+| Robotics | task definitions, scripted IK, OpenPI client | `block/robotics` | [robotics](pipelines/robotics/README.md) |
+| Paper | capture, review, SVG panels and offline ZIP | `block/paper` | [paper](pipelines/paper/README.md) |
+
+All blocks are integrated on `main`; switching branches is a development operation.
+Shared runtime and release tooling live on `block/runtime` and `block/release`.
+`physicalview run full` chains discovery → generation → registration → physical annotation
+→ report → MJCF export → task generation. Reconstruction, prompted editing and viewer
+launch have separate calls.
+
+## Repository map
+
+```text
+physicalview/                 installable application and adapters
+  web/                        PhiView image-only browser
+  panels/                     original viser studio controls
+  resources/pipelines/        packaged block/tool/command manifests
+pipelines/<block>/            one documented contract per pipeline block
+tools/env/                    uv environment synchronization
+tools/backends/               pinned external source bootstrap
+tools/validation/             portable package and repository checks
+envs/{studio,inference,generation}/  separate pyproject.toml + uv.lock
+configs/                      portable defaults and optional cluster example
+tests/                        CPU, external-backend and explicit GPU tests
+docs/                         architecture, evidence, project and release guides
+run/                          historical cluster launchers and experiment scripts
+.github/                      CI, draft-release automation and contribution templates
+```
+
+`data/`, `weights/`, `backends/` and `outputs/` stay outside source control.
+
+## Evidence and scope
+
+The [project summary](docs/PROJECT_SUMMARY.md) maps every requested demo feature to
+implementation and limitations. The [release checks](docs/RELEASE.md) record the new
+uv environment validation, including an H200 render with **1,499,998 Gaussians**.
+Historical [native reconstruction](docs/NATIVE_DEMO.md), [BEHAVIOR/DROID demos](docs/DEMO_BEHAVIOR_DROID.md)
+and [PhiView validation](docs/PHIVIEW_STATUS.md) retain their original run boundaries.
+
+Paper captures are qualitative evidence and require separate visual approval. Current
+robot demonstrations use **GT assistance plus scripted IK, not a learned policy**.
+General language manipulation, reliable grasp success, exhaustive automatic discovery
+and artifact-free scene completion have not been established by these demos.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md), [CHANGELOG.md](CHANGELOG.md) and the
+[release procedure](docs/RELEASE.md). Code is MIT; datasets, models and dependencies
+retain their own licenses.

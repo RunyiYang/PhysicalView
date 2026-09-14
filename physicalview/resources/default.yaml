@@ -125,7 +125,7 @@ models:
     - alternative
   inpaint_backends:
   - id: qwen_image_edit
-    label: Qwen-Image-Edit-2509 (prompted)
+    label: Qwen-Image-Edit (prompted)
     env: sam3
     min_vram_gb: 40
   - id: lama
