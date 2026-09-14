@@ -98,6 +98,8 @@ class Demo:
         self.pinned_frame_id = None
         self.pin_until = 0.
         self.click_selection = ClickSelection(self)
+        from physicalview.phiview_demo import DemoPreparation
+        self.preparation = DemoPreparation(self, enabled=args.demo and not getattr(args, 'no_demo_prepare', False))
         self.jpeg = b''
         self.condition = threading.Condition()
         self.commands = queue.Queue(maxsize=128)
@@ -149,6 +151,7 @@ class Demo:
                 'selected': self.selected, 'mode': self.mode, 'highlight': self.highlight,
                 'background_completion': self.scene.clean is not None,
                 'selection': self.click_selection.status,
+                'demo_preparation': self.preparation.status,
                 'frame': self.frame_id, 'render_ms': round(self.last_render_s*1000, 1),
                 'resolution': self.wh, 'native_resolution': self.native_wh,
                 'gaussians': self.scene.count, 'gpu': self.manifest['hardware'],
@@ -185,12 +188,22 @@ class Demo:
             self.look += np.clip(look, -2000, 2000)
             self.boost = bool(msg.get('boost')); self.last_input = time.monotonic()
             return {'ok': True}
-        if op in ('select', 'selection_begin', 'pick', 'box_select', 'shoot', 'view', 'enable',
+        if op in ('select', 'deselect', 'demo_prepare', 'selection_begin', 'pick', 'box_select', 'shoot', 'view', 'enable',
                   'fall', 'friction', 'throw', 'play', 'pause', 'reset', 'variant',
                   'robot', 'robot_command', 'robot_model', 'policy', 'inpaint', 'generate', 'discover', 'build'):
             if hasattr(self, 'policy') and self.policy.active:
                 self.policy.stop()
-        if op == 'select':
+        if op == 'deselect':
+            self.click_selection.cancel()
+            self.preparation.cancel()
+            self.selected = None
+            self.pinned_frame_id = None
+            self.keys = []; self.look[:] = 0
+            if self.mode == 'clean_selected':
+                self.mode = 'original'
+        elif op == 'demo_prepare':
+            self.preparation.start()
+        elif op == 'select':
             name = msg.get('object')
             if name not in self.state.objects:
                 raise ValueError('Unknown object')
@@ -554,6 +567,7 @@ class Demo:
                 if self.reload_pending:
                     self.reload_build()
                 self.click_selection.finish()
+                self.preparation.advance()
                 if start-self.last_input > .35:
                     self.keys = []
                 moving = bool(self.keys) or bool(np.any(self.look))
@@ -638,6 +652,7 @@ def handler_for(demo):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--demo', action='store_true')
+    ap.add_argument('--no-demo-prepare', action='store_true', help='Skip automatic scene-specific object preparation')
     ap.add_argument('--scene', default='c50d2d1d42_factory')
     ap.add_argument('--out', required=True)
     from physicalview.config import DEFAULT_CONFIG

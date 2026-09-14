@@ -100,9 +100,18 @@ class GaussianScene:
         self.count = len(self.labels)
         self.prompt_backgrounds = {}
 
-    def add_object(self, name, indices, source):
+    def add_object(self, name, indices, source, supersedes=()):
         if name in self.ids:
             raise ValueError('Object already registered')
+        for old in supersedes:
+            self.labels[self.indices[old]] = 0
+            self.names.remove(old)
+            for mapping in (self.ids, self.indices, self.mask_sources, self.variants):
+                mapping.pop(old)
+        if supersedes:
+            for i, old in enumerate(self.names, 1):
+                self.ids[old] = i
+                self.labels[self.indices[old]] = i
         self.names.append(name)
         self.ids[name] = len(self.names)
         self.indices[name] = indices

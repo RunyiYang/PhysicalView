@@ -35,6 +35,16 @@ among viewers. Job duration defaults to four hours. Files persist after the job 
   the displayed frame, then lifts its visible surface to unassigned original Gaussians.
   It appears as a new clicked object with a red mask and white outline. Wait for selection
   to finish, then click **Make simulatable**. Expired frames and invalid surfaces are rejected.
+- **Deselect** or **Esc** clears the selected mask and cancels pending point/box selection.
+  It preserves the object's physics and generated assets. Escape also ends a drag.
+- For ScanNet++ `fb5a96b1a2`, `--demo` automatically prepares the green spray bottle:
+  a curated box at source view `DSC03413.JPG` prompts fresh SAM3 inference, selects the
+  bottle in red, and enables its collision proxy with simulation paused. It combines
+  earlier unprepared click fragments covered by the mask, retaining their files as
+  provenance. Existing physical bodies and other proposals are not reassigned.
+  **Prepare green bottle** selects the persisted object on subsequent uses without
+  duplicating it. Use `--no-demo-prepare` to opt out. This is a scene preset, not a
+  general color detector; selection/build failures are shown in the demo status.
 - Original displays the original splats. Simulatable uses an inpainted background when
   available, otherwise the observed original background with exposed regions left unfilled.
   Native restores the capture resolution.
