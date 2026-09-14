@@ -52,6 +52,10 @@ def inpaint(ctx,names,prompt,logs):
         if 'agents.edit.inpaint_qwen' in spec.argv:
             spec.argv[spec.argv.index('agents.edit.inpaint_qwen')]='physicalview.phiview_inpaint'
             spec.env['SIMANY_REQUIRE_QWEN']='1'
+            # The paper campaign reserves an H200. Keep the model resident;
+            # the adapter checks for 70 GiB free before loading it. An explicit
+            # override still permits CPU offload on a smaller GPU.
+            spec.env['PHIVIEW_QWEN_PLACEMENT']=os.environ.get('PHIVIEW_QWEN_PLACEMENT','cuda')
         if 'agents.edit.inpaint_fill' in spec.argv:
             run_command([ctx.config.interpreter('studio'),'-m','physicalview.phiview_inpaint_guard','--root',ctx.out_dir/'inpaint','--objects',','.join(names),'--prompt',prompt],{},ctx.config.package_root,logs,'prompt-guard')
         stage(spec,logs,f'{i:02d}-{spec.tags.get("step","stage")}')

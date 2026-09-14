@@ -30,6 +30,10 @@ in the copies. Original experiment artifacts remain unchanged.
 - Re-run Qwen-Image-Edit-2511 for clean backgrounds and a selected-object prompt,
   then fit replacement Gaussians for 1,000 iterations. Guards reject cached edits
   and non-Qwen fallback. Prompt text, per-view outcomes and model receipts persist.
+  New H200 campaign stages use direct CUDA placement after a 70 GiB free-memory
+  check; `PHIVIEW_QWEN_PLACEMENT=cpu_offload` explicitly restores offload. The
+  placement is recorded in each model receipt. Earlier offloaded attempts remain
+  valid execution records and are not rewritten by this runtime change.
 - Fresh SAM3 has its own source image, binary masks and scores. It is single-view
   image inference using scene class prompts. Existing Gaussian object proposals
   include GT-assisted metadata; the highlight images do not establish exhaustive
