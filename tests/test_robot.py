@@ -149,6 +149,7 @@ def test_table_z_derived_from_target_when_suite_has_no_table(synthetic_state):
 
 # ------------------------------------------------------------- make_policy (CPU)
 
+@pytest.mark.backend
 def test_make_policy_scripted_matches_registry_client():
     from robo.policy.clients.scripted_client import ScriptedPolicyClient
     cfg = load_config()
@@ -166,6 +167,7 @@ def test_make_policy_scripted_matches_registry_client():
 
 # ---------------------------------------------------------- classification (CPU)
 
+@pytest.mark.backend
 def test_outcome_classification_rules():
     from robo.eval.episode_log import PolicyTimeoutError, SafetyTerminationError
     from robo.policy.control_contract import EnvActionShapeError

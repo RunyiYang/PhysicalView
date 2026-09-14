@@ -16,7 +16,9 @@ import yaml
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]          # the PhysicalView checkout
 DEFAULT_CONFIG = PACKAGE_ROOT / "configs" / "default.yaml"
-DEFAULT_SIMANY_ROOT = "/group/worldcept/code/SimAny-wt/studio"  # overridden by config/env
+if not DEFAULT_CONFIG.is_file():
+    DEFAULT_CONFIG = Path(__file__).with_name("resources") / "default.yaml"
+DEFAULT_SIMANY_ROOT = PACKAGE_ROOT / "backends" / "simany"
 
 
 def resolve_simany_root(raw: dict | None = None) -> Path:
@@ -26,7 +28,9 @@ def resolve_simany_root(raw: dict | None = None) -> Path:
     if env:
         return Path(env).expanduser().resolve()
     if raw and raw.get("simany_root"):
-        return Path(os.path.expandvars(str(raw["simany_root"]))).expanduser().resolve()
+        value = _expand(raw["simany_root"], PACKAGE_ROOT)
+        path = Path(value).expanduser()
+        return (path if path.is_absolute() else PACKAGE_ROOT / path).resolve()
     return Path(DEFAULT_SIMANY_ROOT)
 
 
@@ -105,9 +109,23 @@ class StudioConfig:
         raise KeyError(f"unknown {group} choice {choice_id!r}")
 
 
+def _expand(value: str | os.PathLike, root: Path) -> str:
+    return os.path.expandvars(str(value).replace("${PHYSICALVIEW_ROOT}", str(PACKAGE_ROOT))
+                              .replace("${SIMANY_ROOT}", str(root)))
+
+
 def _abs(root: Path, value: str | os.PathLike) -> Path:
-    p = Path(os.path.expandvars(str(value))).expanduser()
+    p = Path(_expand(value, root)).expanduser()
     return p if p.is_absolute() else (root / p).resolve()
+
+
+def _interpreter_path(root: Path, value: str | os.PathLike) -> Path:
+    # Resolving bin/python itself follows a venv symlink into the base Python,
+    # losing pyvenv.cfg and every package installed in that environment.
+    p = Path(_expand(value, root)).expanduser()
+    if not p.is_absolute():
+        p = root / p
+    return p.parent.resolve() / p.name
 
 
 def _choices(items: list[dict] | None) -> list[ModelChoice]:
@@ -150,12 +168,12 @@ def load_config(path: str | os.PathLike | None = None,
         studio_out=_abs(root, raw.get("studio_out", "outputs/studio")),
         scannetpp_root=_abs(root, raw.get("scannetpp_root", "/data/ScanNetpp")),
         splats_root=_abs(root, raw.get("splats_root", "/data/ScanNetppv2_gsplat/splats")),
-        interpreters={k: _abs(root, v) for k, v in (raw.get("interpreters") or {}).items()},
+        interpreters={k: _interpreter_path(root, v) for k, v in (raw.get("interpreters") or {}).items()},
         env_arch_support={k: tuple(str(a) for a in v)
                           for k, v in (raw.get("env_arch_support") or {}).items()},
         gpu_targets=targets,
         default_remote_gpu=str(slurm.get("default_remote_gpu", "a6000")),
-        env_exports={k: str(v) for k, v in (slurm.get("env_exports") or {}).items()},
+        env_exports={k: _expand(v, root) for k, v in (slurm.get("env_exports") or {}).items()},
         discovery=_choices(models.get("discovery")),
         generation=_choices(models.get("generation")),
         registration=_choices(models.get("registration")),

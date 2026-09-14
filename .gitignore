@@ -7,3 +7,15 @@ torch_extensions/
 *.egg-info/
 .uv-cache/
 MUJOCO_LOG.TXT
+
+.venv/
+.claude/
+/backends/
+data/
+weights/
+dist/
+build/
+configs/local.yaml
+.env
+*.zip
+*.bundle

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import pytest
 
 from physicalview import scene_state as S
 from physicalview.config import load_config
@@ -67,6 +68,8 @@ def _make_result_set(root: Path, name: str, n_obj: int = 2, n_rej: int = 1) -> P
     ("droid_iris_mon_apr_17_16_03_25_2023", "droid", "droid_iris_mon_apr_17_16_03_25_2023"),
     ("video_pilot_a29cccc784", "video", "pilot_a29cccc784"),
     ("behavior_task0002_severe", "behavior", "behavior_task0002_severe"),
+    # outputs/behavior_task-0020 was built as scene behavior_task0020 (dashes stripped)
+    ("behavior_task-0020", "behavior", "behavior_task0020"),
 ])
 def test_classify_result_dir(name, kind, scene):
     assert S.classify_result_dir(name) == (kind, scene)
@@ -134,6 +137,7 @@ def test_discover_missing_outputs_root(tmp_path):
     assert S.discover_result_sets(cfg) == []
 
 
+@pytest.mark.backend
 def test_load_scene_and_reload_synthetic(tmp_path):
     cfg = _cfg_for(tmp_path)
     out = _make_result_set(tmp_path, "abc_factory")
@@ -178,6 +182,7 @@ def test_load_scene_and_reload_synthetic(tmp_path):
     assert not st.objects["obj_02"].accepted and st.objects["obj_02"].aligned is None
 
 
+@pytest.mark.backend
 def test_object_canonical_gs_missing(tmp_path):
     cfg = _cfg_for(tmp_path)
     _make_result_set(tmp_path, "abc_factory")

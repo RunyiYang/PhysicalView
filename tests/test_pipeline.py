@@ -18,6 +18,7 @@ from physicalview.jobs import JobSpec
 
 PY = str(Path(sys.executable))
 SCENE = "c50d2d1d42"
+pytestmark = pytest.mark.backend
 
 
 @pytest.fixture

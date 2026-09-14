@@ -81,6 +81,7 @@ class Context:
         self.robot = None            # robot.RobotSession | None
         self.selection = Selection()
         self.display_mode = getattr(config, "display_mode", "server")   # server | client (scene panel keeps it current)
+        self.initial_scene: str | None = None   # --scene: result set the Scene tab preselects and loads at startup
         self.stream = None           # streaming.ServerRenderStream (owned by the scene panel)
         self.panel_status: dict[str, str] = {}   # tab -> built | placeholder | failed: <err>
         self._status_handle = None
@@ -130,7 +131,7 @@ class StudioApp:
     )
 
     def __init__(self, config: StudioConfig, port: int, host: str = "0.0.0.0",
-                 share: bool = False) -> None:
+                 share: bool = False, scene: str | None = None) -> None:
         import viser
         from physicalview.jobs import JobManager
 
@@ -140,6 +141,7 @@ class StudioApp:
         self.server.scene.set_up_direction("+z")
         jobs = JobManager(config, self.gpu, on_update=self._on_job_update)
         self.ctx = Context(self.server, config, self.gpu, jobs)
+        self.ctx.initial_scene = scene
         self._build_layout()
         if share:
             try:
@@ -203,12 +205,15 @@ def main(argv=None) -> int:
     ap.add_argument("--port", type=int, default=None)
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--share", action="store_true", help="request a viser share URL")
+    ap.add_argument("--scene", default=None,
+                    help="result set to preselect and load at startup (e.g. behavior_task-0020)")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(name)s %(levelname)s %(message)s")
     config = load_config(args.config)
-    app = StudioApp(config, port=args.port or config.viewer_port, host=args.host, share=args.share)
+    app = StudioApp(config, port=args.port or config.viewer_port, host=args.host, share=args.share,
+                    scene=args.scene)
     print(f"[studio] listening on http://{args.host}:{args.port or config.viewer_port}  "
           f"(tunnel: ssh -L {args.port or config.viewer_port}:$(hostname):{args.port or config.viewer_port} <login>)",
           flush=True)

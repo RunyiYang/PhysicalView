@@ -12,7 +12,7 @@ from physicalview.config import DEFAULT_CONFIG, load_config
 
 def test_default_config_loads_and_resolves_paths():
     cfg = load_config()
-    assert cfg.repo_root.is_dir()
+    assert cfg.repo_root.is_absolute()
     assert cfg.outputs_root.is_absolute()
     assert cfg.interpreter("main").name.startswith("python")
     assert {c.id for c in cfg.generation} >= {"trellis", "reconviagen", "sam3d", "hybrid"}
@@ -21,7 +21,7 @@ def test_default_config_loads_and_resolves_paths():
     assert cfg.collision_modes == ["room", "shim"]
     assert "pi05_droid_jointpos" in cfg.policies
     assert set(cfg.gpu_targets) == {"a6000", "h200", "a100", "rtx6000"}
-    assert cfg.gpu_targets["h200"].extra == ("--exclude=msp3-[0-7]",)
+    assert cfg.gpu_targets["h200"].extra == ()
     assert cfg.render_wh == (640, 360)
 
 
@@ -31,6 +31,16 @@ def test_unknown_choice_and_interpreter_raise():
         cfg.choice("generation", "nope")
     with pytest.raises(KeyError):
         cfg.interpreter("nope")
+
+
+def test_virtualenv_interpreter_does_not_resolve_to_base_python(tmp_path):
+    from physicalview.config import _interpreter_path
+    base = tmp_path / "base-python"
+    base.write_text("base")
+    venv_bin = tmp_path / "venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").symlink_to(base)
+    assert _interpreter_path(tmp_path, "venv/bin/python") == venv_bin / "python"
 
 
 def test_relative_paths_resolve_against_repo_root(tmp_path: Path):

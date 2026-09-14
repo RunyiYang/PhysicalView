@@ -207,7 +207,10 @@ def classify_result_dir(name: str) -> tuple[str, str]:
     if base.startswith("video_"):
         return "video", base[len("video_"):]
     if base.startswith("behavior_task"):
-        return "behavior", base
+        # run/run_behavior_recon.sh writes outputs/behavior_task-0020 but builds the scene
+        # as behavior_task0020 (SCENE_NAME=behavior_${TASK//-/}); the scene id is the
+        # dash-free form, so scene_dir/splat lookup and SIMANY_SCENE both resolve.
+        return "behavior", base.replace("-", "")
     return kind, base
 
 

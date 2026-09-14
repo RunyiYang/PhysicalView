@@ -10,7 +10,7 @@ import os as _os
 import sys as _sys
 from pathlib import Path as _Path
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 
 def _bootstrap_simany_root() -> None:
@@ -20,7 +20,7 @@ def _bootstrap_simany_root() -> None:
         raw = yaml.safe_load(_Path(DEFAULT_CONFIG).read_text()) or {} if _Path(DEFAULT_CONFIG).exists() else {}
         root = resolve_simany_root(raw)
     except Exception:  # noqa: BLE001 - never break import
-        root = _Path(_os.environ.get("SIMANY_ROOT", "/group/worldcept/code/SimAny-wt/studio"))
+        root = _Path(_os.environ.get("SIMANY_ROOT", str(_Path(__file__).resolve().parents[1] / "backends/simany")))
     r = str(root)
     if root.is_dir() and r not in _sys.path:
         _sys.path.append(r)
