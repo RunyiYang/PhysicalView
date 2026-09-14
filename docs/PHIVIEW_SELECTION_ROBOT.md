@@ -49,3 +49,24 @@ Modules: `phiview_box.py` handles rectangle selection; `phiview_selection.py`
 handles discovery and persistence; `phiview_rigs.py` handles hardware and camera
 contracts; `phiview_policy.py` handles observations and asynchronous control;
 `phiview_policy_server.py` loads checkpoints in their separate environment.
+
+## Validation on 2026-09-14
+
+On scene `fb5a96b1a2_factory`, implementation `27a6b47` passed 128 CPU tests
+(50 explicit prerequisite skips), 31 focused checks in A6000 allocation `898843`,
+and Chromium checks for click selection, reversed box discovery, red highlighting
+with other masks disabled, Make simulatable, hardware switching, fixed exterior
+and wrist cameras, and free navigation. The browser transferred no 3D assets and
+created no canvas. A fresh SAM3 box mask isolated the visible chair surface; its
+convex proxy parameters remain unmeasured defaults.
+
+The base π0.5 checkpoint executed two observation/action chunks (30 ticks, 2 seconds
+of simulation time) on this implementation, with server metadata confirming the
+checkpoint, absolute action convention, and A6000 inference. The sim co-trained
+variant executed 15 ticks and pause cancellation passed during the preceding
+implementation check. These checks establish runtime integration, not task success.
+
+Evidence is under PhiRoom's ignored output directory
+`outputs/demo-fb5a96b1a2-redmask/live/`: `selection-camera-check-27a6b47/`,
+`session-selection-final-test/policies/`, and `robot-camera-check/`.
+The original v2.0.0 release media is unchanged.

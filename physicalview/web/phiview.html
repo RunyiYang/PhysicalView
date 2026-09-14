@@ -44,7 +44,9 @@ for(let id of ['fall','friction','throw','robot','robotCommand','frictionValue']
 for(const [id,items,value] of [['robotModel',s.robot_models,s.robot_model],['policyModel',s.policies,s.policy_id]]){const el=$(id);if(!el.options.length&&items)el.replaceChildren(...items.map(v=>{const option=new Option(v.label,v.id);option.disabled=v.available===false;return option}));el.value=value}
 $('cameraView').value=s.camera_view||'free';for(const option of $('cameraView').options)option.disabled=option.value!=='free'&&s.robot.state==='absent';
 $('policyStatus').textContent=s.policy?`${s.policy.state} · ${s.policy.ticks||0}${s.policy.limit?'/'+s.policy.limit:''} policy steps${s.policy.error?' · '+s.policy.error:''}`:'';
-if(!cameraLoaded&&s.cameras){$('cameras').replaceChildren(...s.cameras.map(n=>new Option(n,n)));cameraLoaded=true;if(s.camera_name)$('cameras').value=s.camera_name}
+if(!cameraLoaded&&s.cameras){$('cameras').replaceChildren(...s.cameras.map(n=>new Option(n,n)));cameraLoaded=true;}
+if(s.camera_name)$('cameras').value=s.camera_name;
+$('resolution').value=s.resolution[0]===s.native_resolution[0]&&s.resolution[1]===s.native_resolution[1]?'native':s.resolution[0]===1280?'720p':'1080p';
 $('notice').textContent=s.error||`${o?o.label+' selected · ':''}${s.camera_view&&s.camera_view!=='free'?s.camera_view+' camera · ':''}${s.running?'Simulation running':'Ready'} · ${s.sim_time.toFixed(2)} s${s.background_completion===false?' · Original background; newly exposed regions are unfilled':''}`;
 $('pipeline').textContent=s.pipeline.state==='idle'?'':JSON.stringify(s.pipeline,null,2);$('robotStatus').textContent=s.robot.state==='absent'?'':`${s.robot.state} · ${s.robot.controller||'Robot placed'}${s.robot.max_lift_m!==undefined?' · max lift '+s.robot.max_lift_m.toFixed(3)+' m':''}`;
 }
