@@ -54,6 +54,9 @@ def main():
         n=f"obj_{obj['index']:02d}";p=asset/'objects'/n
         alignment=json.loads((p/'aligned.json').read_text())
         metadata.append({'id':n,'label':obj['label'],'accepted':not bool(alignment.get('rejected')),'physics':(p/'physics.json').exists()})
+    if a.dataset=='libero' and not (asset/'sim_export/native-physics-receipt.json').exists():
+        from physicalview.paper_libero import export_native_physics
+        export_native_physics(scene,asset,objects,{m['id'] for m in metadata if m['accepted']})
     rows=root/f'{a.dataset}-rows';rows.mkdir(exist_ok=True)
     save_json(rows/f'{a.index}.json',{'dataset':a.dataset,'scene':sid,'result_set':sid+'_factory','assets':asset,'objects':metadata,'auto':a.dataset=='behavior','source':row})
     env={'SIMANY_MESH_SRC':'derived'} if a.dataset=='behavior' else {}

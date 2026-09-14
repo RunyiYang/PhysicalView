@@ -136,3 +136,11 @@ claim a clean reconstruction.
 Bounded feature retries archive the replaced feature folders and previous evidence
 under `feature-attempts/`, preserve unrelated groups, and clear stale approvals for
 changed images. Each new PNG sidecar includes the renderer/capture source hashes.
+
+LIBERO physics retains the original simulator contact geometry, masses, inertias
+and coefficients at the recorded scene state. The adapter maps accepted generated
+object IDs onto native free bodies; rejected proposals remain static fixtures.
+All named geom positions are checked before/after the mapping. The native robot is
+omitted, and choosing a registered generated alternative still rebuilds that body's
+collision model. This is explicitly GT-assisted native-simulator physics, distinct
+from ScanNet++'s reconstructed contact geometry.

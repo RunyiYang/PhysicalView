@@ -139,4 +139,49 @@ def main():
         render_contract(tree,m,d,names,scene)
         save_json(scene/'source-receipt.json',{'source':row,'adaptation':receipt,'objects':groups,'capture_complete':True})
 
+
+
+def export_native_physics(scene, asset, objects, accepted_names):
+    """Preserve native contact geometry/materials instead of re-convexifying a room.
+
+    This is explicitly GT-assisted simulator evidence. Rejected generated objects
+    remain static native fixtures, so clean-all and active-body sets agree.
+    """
+    import mujoco
+    scene=Path(scene);asset=Path(asset)
+    tree=ET.parse(scene/'native-scene.xml')
+    source=mujoco.MjModel.from_xml_string(ET.tostring(tree.getroot()).decode())
+    source_data=mujoco.MjData(source);mujoco.mj_forward(source,source_data)
+    groups={g['objectId']:g for g in json.loads((scene/'scans/segments_anno.json').read_text())['segGroups']}
+    renamed={};active=[];frozen=[]
+    for obj in objects:
+        name=f"obj_{obj['index']:02d}";native=groups[obj['gt_object_id']]['native_body']
+        body=tree.find(f".//body[@name='{native}']")
+        if body is None:raise ValueError(f'Native body missing: {native}')
+        body.set('name',name);renamed[native]=name
+        if name not in accepted_names:
+            for joint in list(body.findall('joint'))+list(body.findall('freejoint')):
+                body.remove(joint)
+            frozen.append(name)
+        else:active.append(name)
+    if not active:raise ValueError('No accepted native bodies to simulate')
+    model=mujoco.MjModel.from_xml_string(ET.tostring(tree.getroot()).decode())
+    data=mujoco.MjData(model);mujoco.mj_forward(model,data)
+    errors=[]
+    for i in range(model.ngeom):
+        name=model.geom(i).name
+        if name:
+            j=source.geom(name).id
+            errors.append(float(np.linalg.norm(data.geom_xpos[i]-source_data.geom_xpos[j])))
+    if max(errors,default=0)>1e-5:raise ValueError('Native collision geometry moved while naming objects')
+    out=asset/'sim_export';out.mkdir(parents=True,exist_ok=True);tree.write(out/'scene.xml')
+    record={'source':'native LIBERO MuJoCo contact model at recorded initial state',
+        'source_xml':str(scene/'native-scene.xml'),'gt_assisted':True,'active':active,'frozen':frozen,
+        'renamed_bodies':renamed,'maximum_geom_position_error_m':max(errors,default=0),
+        'physical_parameters':'native masses, inertias, contact coefficients and fixture geometry retained',
+        'native_robot_omitted':True,'generated_variants':'registered alternatives replace native selected-body collision only when chosen'}
+    save_json(out/'native-physics-receipt.json',record)
+    return record
+
+
 if __name__=='__main__':main()
