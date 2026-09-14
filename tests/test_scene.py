@@ -8,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import pytest
 
 from physicalview import scene_state as S
 from physicalview.config import load_config
@@ -136,6 +137,7 @@ def test_discover_missing_outputs_root(tmp_path):
     assert S.discover_result_sets(cfg) == []
 
 
+@pytest.mark.backend
 def test_load_scene_and_reload_synthetic(tmp_path):
     cfg = _cfg_for(tmp_path)
     out = _make_result_set(tmp_path, "abc_factory")
@@ -180,6 +182,7 @@ def test_load_scene_and_reload_synthetic(tmp_path):
     assert not st.objects["obj_02"].accepted and st.objects["obj_02"].aligned is None
 
 
+@pytest.mark.backend
 def test_object_canonical_gs_missing(tmp_path):
     cfg = _cfg_for(tmp_path)
     _make_result_set(tmp_path, "abc_factory")

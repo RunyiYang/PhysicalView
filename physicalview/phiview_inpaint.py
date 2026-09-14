@@ -9,12 +9,14 @@ def load_qwen():
     import torch
     import diffusers
     from diffusers import QwenImageEditPlusPipeline
-    root = Path(os.environ.get('PHIVIEW_QWEN_MODEL',
-        '/group/worldcept/hf_cache/hub/models--Qwen--Qwen-Image-Edit-2511/snapshots/6f3ccc0b56e431dc6a0c2b2039706d7d26f22cb9'))
+    root = os.environ.get('PHIVIEW_QWEN_MODEL', 'Qwen/Qwen-Image-Edit-2511')
+    revision = os.environ.get('PHIVIEW_QWEN_REVISION', '6f3ccc0b56e431dc6a0c2b2039706d7d26f22cb9')
     placement = os.environ.get('PHIVIEW_QWEN_PLACEMENT', 'cpu_offload')
     if placement not in ('cpu_offload', 'cuda'):
         raise ValueError('Unknown Qwen placement')
     options = {}
+    if not Path(root).is_dir():
+        options['revision'] = revision
     if placement == 'cuda':
         free, total = torch.cuda.mem_get_info()
         if free < 70 * 2**30:
@@ -27,7 +29,7 @@ def load_qwen():
     if placement == 'cpu_offload':
         pipe.enable_model_cpu_offload()
     (inpaint_qwen.C.OUT/'inpaint'/'model-receipt.json').write_text(json.dumps({
-        'model': str(root), 'diffusers': diffusers.__version__, 'zero_cond_t': True,
+        'model': str(root), 'revision': revision, 'diffusers': diffusers.__version__, 'zero_cond_t': True,
         'torch': torch.__version__, 'gpu': torch.cuda.get_device_name(), 'placement': placement}, indent=2))
     print(f'[PhiView] Prompt model: {root}', flush=True)
     return pipe

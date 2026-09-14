@@ -498,7 +498,8 @@ def main(argv=None):
     ap.add_argument('--demo', action='store_true')
     ap.add_argument('--scene', default='c50d2d1d42_factory')
     ap.add_argument('--out', required=True)
-    ap.add_argument('--config', default=str(Path(__file__).resolve().parents[1]/'configs/phiview.yaml'))
+    from physicalview.config import DEFAULT_CONFIG
+    ap.add_argument('--config', default=str(DEFAULT_CONFIG))
     ap.add_argument('--host', default='0.0.0.0')
     ap.add_argument('--port', type=int, default=8095)
     ap.add_argument('--width', type=int, default=1920)
