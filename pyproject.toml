@@ -18,6 +18,12 @@ dependencies = [
   "imageio",
   "opencv-python-headless",
 ]
+
+[project.scripts]
+phiview = "physicalview.phiview:main"
+
+[tool.setuptools.package-data]
+physicalview = ["web/*.html"]
 # torch (CUDA 12.8 build) and gsplat (compiled from source for sm_80/86/90/120) are managed by
 # run/setup_env.sh, not by pip resolution; see docs/ENV.md.
 

@@ -33,6 +33,16 @@ def test_unknown_choice_and_interpreter_raise():
         cfg.interpreter("nope")
 
 
+def test_virtualenv_interpreter_does_not_resolve_to_base_python(tmp_path):
+    from physicalview.config import _interpreter_path
+    base = tmp_path / "base-python"
+    base.write_text("base")
+    venv_bin = tmp_path / "venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").symlink_to(base)
+    assert _interpreter_path(tmp_path, "venv/bin/python") == venv_bin / "python"
+
+
 def test_relative_paths_resolve_against_repo_root(tmp_path: Path):
     cfg_text = textwrap.dedent("""
         outputs_root: out
