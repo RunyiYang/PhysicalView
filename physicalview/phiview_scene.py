@@ -172,16 +172,6 @@ class GaussianScene:
             ids[confidence < .25] = 0
             mask = ids.cpu().numpy().astype(np.uint16)
         if highlight:
-            import cv2
-            palette = np.tile(np.array([.12, .86, .72], dtype=np.float32), (len(self.names)+1, 1))
-            if selected in self.ids:
-                palette[self.ids[selected]] = [1., .72, .12]
-            foreground = mask > 0
-            rgb[foreground] = rgb[foreground]*.82 + palette[mask[foreground]]*.18
-            # One morphology pass regardless of object count; avoid full-frame CPU
-            # work per object while flying through the room.
-            kernel = np.ones((3, 3), np.uint8)
-            edge = cv2.morphologyEx(mask, cv2.MORPH_GRADIENT, kernel) > 0
-            edge_ids = cv2.dilate(mask, kernel)
-            rgb[edge] = palette[edge_ids[edge]]
+            from physicalview.highlight import highlight_objects
+            rgb = highlight_objects(rgb, mask, self.ids.get(selected))
         return (np.clip(rgb, 0, 1)*255+.5).astype(np.uint8), mask, depth, w2c, K

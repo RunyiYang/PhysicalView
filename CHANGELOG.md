@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Make visible objects red with a strong filled mask and a white contour; selected
+  objects use a stronger fill and thicker outline. Picking labels remain unchanged.
+
 ## 0.2.0 — 2026-09-14
 
 - Integrate native reconstruction, PhiView demo/paper work and BEHAVIOR/DROID studio
