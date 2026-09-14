@@ -27,10 +27,16 @@ among viewers. Job duration defaults to four hours. Files persist after the job 
 
 ## Controls
 
-- WASD moves relative to the view; Q/E moves vertically. Shift triples speed. Right-drag
-  rotates without roll; pitch stops short of the poles. The speed slider adjusts travel.
-  F focuses the selected object. Inputs stop on window blur or a 350 ms heartbeat timeout.
-- Click any reconstructed object, or choose a known object in the object list. Known
+- The mouse toolbar has **View**, **Select object**, and **Move object** modes.
+  View uses left-drag to orbit, right-drag (or Shift-left-drag) to pan, wheel to zoom,
+  and middle-drag to dolly. Select object uses a click or left-drag box without moving
+  the camera. Move object drags the selected simulatable body horizontally at its
+  current height, with physics paused. Reset restores its starting pose.
+- WASD moves relative to the view; Q/E moves vertically. Shift triples speed. F focuses
+  the selected object and sets its orbit center. Navigation remains on the server.
+  Fixed robot camera views do not move; choose Free view to navigate. Inputs stop on
+  window blur or a 350 ms heartbeat timeout.
+- In Select object mode, click any reconstructed object, or choose one in the object list. Known
   regions select immediately. An unlabelled region runs a SAM3 positive point prompt on
   the displayed frame, then lifts its visible surface to unassigned original Gaussians.
   It appears as a new clicked object with a red mask and white outline. Wait for selection
@@ -77,7 +83,9 @@ among viewers. Job duration defaults to four hours. Files persist after the job 
   third-person exterior and wrist views use actual simulated camera poses.
   See [selection, robot and camera contracts](PHIVIEW_SELECTION_ROBOT.md) for
   mouse gestures, model loading, image preprocessing and control semantics.
-  Motion completion is not labeled as grasp or task success.
+  All selection highlights are hidden during policy loading and execution, including
+  scripted IK, then restored on finish, pause, or failure. Selection and the highlight
+  preference are preserved. Motion completion is not labeled as grasp or task success.
 
 ## Environment
 
@@ -130,3 +138,16 @@ from paper evaluation results.
 
 Rendering uses [gsplat's rasterization API](https://docs.gsplat.studio/main/apis/rasterization.html)
 for full SH color, depth and object-membership passes; physics uses MuJoCo.
+
+## Capture a downloadable green-bottle demo
+
+Run `tools/demos/capture_green_bottle.py --session SESSION --config CONFIG --out NEW_DIRECTORY`
+in the compatible GPU environment. It requires a session with the prepared green bottle.
+The output includes original and moved GS images, a contact-driven scripted robot push,
+a shooting MP4, camera/physics receipts, and a ZIP. It checks robot displacement and
+projectile-bottle contacts, and never overwrites the source session. The scene/bottle
+remain Gaussian renders; robot/projectile meshes are composited using depth. The
+robot capture uses scripted IK and is not a learned-policy success claim.
+
+The viewer serves capture files placed in its session's `downloads/` directory.
+`green-bottle-demo.zip` enables its Download demo images + video link.

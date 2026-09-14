@@ -59,7 +59,8 @@ def test_client_is_image_only_and_releases_navigation():
     assert '<img id="frame"' in html
     for forbidden in ('<canvas', 'WebGL', 'THREE.', '.ply', '.splat', 'unpkg.com', 'cdn.'):
         assert forbidden not in html
-    assert "'blur',clearInput" in html and 'document.hidden' in html
+    mouse = (Path(__file__).parents[1]/'physicalview/web/phiview_mouse.js').read_text()
+    assert "'blur',clearInput" in mouse and 'document.hidden' in mouse
     assert "'X-Frame-Id'" in html
 
 

@@ -33,7 +33,7 @@ physicalview = "physicalview.cli:main"
 phiview = "physicalview.phiview:main"
 
 [tool.setuptools.package-data]
-physicalview = ["web/*.html", "resources/*.yaml", "resources/pipelines/*.json"]
+physicalview = ["web/*.html", "web/*.js", "resources/*.yaml", "resources/pipelines/*.json"]
 # GPU dependencies have independent, locked uv projects in envs/.
 
 [tool.setuptools.packages.find]

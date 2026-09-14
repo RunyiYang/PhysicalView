@@ -14,6 +14,7 @@ class FlyCamera:
     pitch: float
     fov: float = 60.0
     speed: float = 1.2
+    orbit_distance: float | None = None
 
     @classmethod
     def from_w2c(cls, w2c, fov=60.0):

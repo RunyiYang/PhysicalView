@@ -100,11 +100,14 @@ class Demo:
         self.click_selection = ClickSelection(self)
         from physicalview.phiview_demo import DemoPreparation
         self.preparation = DemoPreparation(self, enabled=args.demo and not getattr(args, 'no_demo_prepare', False))
+        from physicalview.phiview_drag import ObjectDrag
+        self.object_drag = ObjectDrag(self)
         self.jpeg = b''
         self.condition = threading.Condition()
         self.commands = queue.Queue(maxsize=128)
         self.stop = threading.Event()
         self.frame_error = None
+        self.last_highlights_suppressed = False
         self.keys, self.look, self.boost = [], np.zeros(2), False
         self.last_input = 0.
         self.pipeline_thread = None
@@ -122,6 +125,7 @@ class Demo:
                         cwd=Path(__file__).resolve().parents[1], text=True).strip(),
                     'config_sha256': hashlib.sha256(Path(args.config).read_bytes()).hexdigest(),
                     'web_sha256': hashlib.sha256((Path(__file__).parent/'web/phiview.html').read_bytes()).hexdigest(),
+                    'mouse_js_sha256': hashlib.sha256((Path(__file__).parent/'web/phiview_mouse.js').read_bytes()).hexdigest(),
                     'gaussians': self.scene.count, 'sh_degree': self.scene.raw['sh_degree'],
                     'rasterize_mode': self.scene.rasterize_mode,
                     'native_resolution': self.native_wh, 'stream_resolution': self.wh,
@@ -142,13 +146,19 @@ class Demo:
         objects = []
         for name, rec in self.state.objects.items():
             proposals = ['original'] + [s for s, p in rec.proposals.items() if p.gs_ply]
-            objects.append({'id': name, 'label': rec.label, 'simulatable': name in self.physics.available,
+            position = None
+            if name in self.physics.available:
+                qa, _ = self.physics.addresses(name)
+                position = self.physics.data.qpos[qa:qa+3].tolist()
+            objects.append({'id': name, 'label': rec.label, 'position': position, 'simulatable': name in self.physics.available,
                 'enabled': name in self.physics.enabled, 'variant': self.scene.variants[name],
                 'proposals': proposals, 'physics': self.physics.parameters(name),
                 'interactive': bool(rec.meta.get('interactive')),
                 'mask_source': self.scene.mask_sources[name]})
         return {'ready': self.ready, 'scene': self.args.scene, 'objects': objects,
                 'selected': self.selected, 'mode': self.mode, 'highlight': self.highlight,
+                'highlights_suppressed': self.highlights_suppressed(),
+                'downloads_ready': (self.out/'downloads/green-bottle-demo.zip').is_file(),
                 'background_completion': self.scene.clean is not None,
                 'selection': self.click_selection.status,
                 'demo_preparation': self.preparation.status,
@@ -163,7 +173,12 @@ class Demo:
                 'robot_cameras': camera_contract(self.physics),
                 'error': self.frame_error, 'cameras': self.camera_names,
                 'camera_name': self.camera_name,
+                'camera_pose': {'position': self.camera.position.tolist(), 'yaw': self.camera.yaw,
+                                'pitch': self.camera.pitch, 'orbit_distance': self.camera.orbit_distance},
                 'projectile_contacts': self.physics.events[-10:]}
+
+    def highlights_suppressed(self):
+        return self.policy.active or (self.physics.running and bool(self.physics.plan))
 
     def selected_required(self):
         if self.selected is None:
@@ -178,6 +193,17 @@ class Demo:
 
     def execute(self, msg):
         op = msg.get('op')
+        result = {}
+        if op not in ('move', 'move_begin', 'move_end', 'input', 'navigate', 'snapshot', 'selection_end') and hasattr(self, 'object_drag'):
+            self.object_drag.end()
+        if op == 'navigate':
+            if self.camera_view != 'free':
+                return {'ok': True, 'fixed_camera': True}
+            from physicalview.phiview_navigation import navigate
+            frame = self.frames.get(self.frame_id)
+            navigate(self.camera, msg, depth=frame[1] if frame else None)
+            self.dirty = True
+            return {'ok': True}
         if op == 'input':
             if getattr(self, 'camera_view', 'free') != 'free':
                 return {'ok': True}
@@ -188,12 +214,14 @@ class Demo:
             self.look += np.clip(look, -2000, 2000)
             self.boost = bool(msg.get('boost')); self.last_input = time.monotonic()
             return {'ok': True}
-        if op in ('select', 'deselect', 'demo_prepare', 'selection_begin', 'pick', 'box_select', 'shoot', 'view', 'enable',
+        if op in ('select', 'deselect', 'demo_prepare', 'move_begin', 'selection_begin', 'pick', 'box_select', 'shoot', 'view', 'enable',
                   'fall', 'friction', 'throw', 'play', 'pause', 'reset', 'variant',
                   'robot', 'robot_command', 'robot_model', 'policy', 'inpaint', 'generate', 'discover', 'build'):
             if hasattr(self, 'policy') and self.policy.active:
                 self.policy.stop()
         if op == 'deselect':
+            if hasattr(self, 'object_drag'):
+                self.object_drag.end()
             self.click_selection.cancel()
             self.preparation.cancel()
             self.selected = None
@@ -203,6 +231,12 @@ class Demo:
                 self.mode = 'original'
         elif op == 'demo_prepare':
             self.preparation.start()
+        elif op == 'move_begin':
+            result['drag'] = self.object_drag.begin(int(msg.get('frame', self.frame_id)), [msg.get('x'), msg.get('y')])
+        elif op == 'move':
+            self.object_drag.move(msg.get('drag'), [msg.get('x'), msg.get('y')])
+        elif op == 'move_end':
+            self.object_drag.end(msg.get('drag'))
         elif op == 'select':
             name = msg.get('object')
             if name not in self.state.objects:
@@ -362,6 +396,7 @@ class Demo:
             direction = p-self.camera.position; direction /= np.linalg.norm(direction)
             self.camera.yaw = float(np.arctan2(direction[1], direction[0]))
             self.camera.pitch = float(np.arcsin(direction[2]))
+            self.camera.orbit_distance = float(np.linalg.norm(p-self.camera.position))
         elif op == 'resolution':
             wh = msg.get('value')
             choices = {'720p': (1280, 720), '1080p': (1920, 1080), 'native': self.native_wh}
@@ -384,7 +419,7 @@ class Demo:
         self.dirty = True
         self.audit.write(json.dumps({'time': time.time(), 'command': msg, 'selected': self.selected,
                                      'sim_time': float(self.physics.data.time)}, default=json_default)+'\n')
-        return {'ok': True, 'selected': self.selected}
+        return {'ok': True, 'selected': self.selected, **result}
 
     def launch_pipeline(self, msg):
         if self.click_selection.busy:
@@ -518,8 +553,11 @@ class Demo:
         if self.camera_view != 'free' and self.physics.robot is None:
             self.camera_view = 'free'
         camera = self.camera if self.camera_view == 'free' else RobotCamera(self.physics, self.camera_view)
-        image, mask, depth, w2c, K = self.scene.render(camera, self.wh, self.mode, self.selected,
-            self.physics.available, self.physics.transforms() if self.mode == 'simulation' else {}, self.highlight)
+        suppressed = self.highlights_suppressed()
+        image, mask, depth, w2c, K = self.scene.render(camera, self.wh, self.mode,
+            None if suppressed else self.selected, self.physics.available,
+            self.physics.transforms() if self.mode == 'simulation' else {}, self.highlight and not suppressed)
+        self.last_highlights_suppressed = suppressed
         if self.mode == 'simulation':
             image = self.physics.overlay(image, depth, w2c, K)
             if self.physics.overlay_mask is not None:
@@ -576,6 +614,8 @@ class Demo:
                 policy_owns_step = self.policy.advance()
                 if self.physics.running and not policy_owns_step:
                     self.physics.step(dt)
+                if self.highlights_suppressed() != self.last_highlights_suppressed:
+                    self.dirty = True
                 if self.dirty or moving or self.physics.running:
                     self.render(); self.dirty = False
                 self.status_cache = self.status()
@@ -610,6 +650,28 @@ def handler_for(demo):
             url = urlparse(self.path)
             if url.path == '/':
                 return self.reply(200, (Path(__file__).parent/'web'/'phiview.html').read_bytes(), 'text/html; charset=utf-8')
+            if url.path == '/phiview_mouse.js':
+                return self.reply(200, (Path(__file__).parent/'web'/'phiview_mouse.js').read_bytes(), 'text/javascript; charset=utf-8')
+            if url.path.startswith('/downloads/'):
+                name = url.path.removeprefix('/downloads/')
+                mime = {'.zip': 'application/zip', '.png': 'image/png', '.mp4': 'video/mp4', '.json': 'application/json'}
+                path = demo.out/'downloads'/name
+                if (not name or any(not (c.isascii() and (c.isalnum() or c in '._-')) for c in name)
+                        or Path(name).suffix not in mime or not path.is_file()
+                        or path.resolve().parent != (demo.out/'downloads').resolve()):
+                    return self.reply(404, {'error': 'Download not found'})
+                self.send_response(200)
+                self.send_header('Content-Type', mime[path.suffix])
+                self.send_header('Content-Length', str(path.stat().st_size))
+                self.send_header('Content-Disposition', f'attachment; filename="{name}"')
+                self.send_header('X-Content-Type-Options', 'nosniff')
+                self.end_headers()
+                try:
+                    with path.open('rb') as source:
+                        shutil.copyfileobj(source, self.wfile)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                return
             if url.path in ('/api/status', '/api/health'):
                 return self.reply(200 if demo.ready else 503, demo.status_cache)
             if url.path == '/frame.jpg':
