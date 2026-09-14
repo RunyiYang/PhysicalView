@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Allow shooting and object simulation before background inpainting. Original observed
+  background remains available; unfilled regions are labeled and inpainted views remain gated.
+
 - Make visible objects red with a strong filled mask and a white contour; selected
   objects use a stronger fill and thicker outline. Picking labels remain unchanged.
 
