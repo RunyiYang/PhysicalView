@@ -63,6 +63,10 @@ class LearnedPolicy:
                     self.entries[name] = registry.get(name)
         except (ImportError, KeyError, FileNotFoundError):
             pass
+        if any(c['id'] == 'pi05_droid_jointpos' and c['available'] for c in self.choices()):
+            self.policy_id = 'pi05_droid_jointpos'
+            self.status = {'state': 'idle', 'policy': self.policy_id}
+        self.server_ready = False
         atexit.register(self.close)
 
     def choices(self):
@@ -76,6 +80,8 @@ class LearnedPolicy:
         self.actions = []
         self.epoch += 1
         self.demo.physics.running = False
+        if getattr(self.demo.physics, 'robot', None):
+            self.demo.physics.robot_status['state'] = 'idle'
         if self.status['state'] in ('loading', 'inferencing', 'running'):
             self.status = {**self.status, 'state': 'stopped'}
 
@@ -102,6 +108,8 @@ class LearnedPolicy:
         self.process = None
         self.policy_id = name
         self.status = {'state': 'idle', 'policy': name}
+        if self.demo.physics.robot:
+            self.demo.physics.robot_status['controller'] = POLICY_LABELS[name]
 
     def start(self, prompt, ticks=150):
         if self.policy_id == 'scripted_ik':
@@ -117,16 +125,19 @@ class LearnedPolicy:
             raise ValueError('Policy horizon must be between 15 and 900 ticks')
         self.stop()
         self.prompt, self.limit, self.ticks = prompt, ticks, 0
+        self.run_id = str(time.time_ns())
         self.active = True
         self.demo.physics.plan = []
+        self.demo.physics.robot_status.update(controller=POLICY_LABELS[self.policy_id], state='policy_running')
         self.status = {'state': 'loading', 'policy': self.policy_id, 'ticks': 0,
-                       'limit': ticks, 'success': None, 'control_hz_simulation': 15}
+                       'limit': ticks, 'run_id': self.run_id, 'success': None, 'control_hz_simulation': 15}
         self._request()
 
     def _ensure_server(self):
         if self.process and self.process.poll() is None:
             return
         entry = self.entries[self.policy_id]
+        self.server_ready = False
         self.token = uuid.uuid4().hex
         with socket.socket() as sock:
             sock.bind(('127.0.0.1', 0))
@@ -135,7 +146,7 @@ class LearnedPolicy:
         directory.mkdir(parents=True)
         self.log_path = directory/'server.log'
         env = dict(os.environ, XLA_PYTHON_CLIENT_PREALLOCATE='false',
-                   XLA_PYTHON_CLIENT_MEM_FRACTION='.30', JAX_COMPILATION_CACHE_DIR=str(directory/'jax_cache'))
+                   XLA_PYTHON_CLIENT_MEM_FRACTION='.30', JAX_COMPILATION_CACHE_DIR=str(self.demo.out/'policy-cache'))
         # This process belongs only to this viewer. Never reuse an unidentified port.
         with self.log_path.open('w') as log:
             self.process = subprocess.Popen([
@@ -151,8 +162,8 @@ class LearnedPolicy:
         d = self.demo
         self._ensure_server()
         request = {'prompt': self.prompt}
-        directory = d.out/'policies'/self.token/f'observation-{self.ticks:04d}'
-        directory.mkdir(exist_ok=True)
+        directory = d.out/'policies'/self.token/'runs'/self.run_id/f'observation-{self.ticks:04d}'
+        directory.mkdir(parents=True)
         for view, key in [('exterior', 'exterior_image_1_left'), ('wrist', 'wrist_image_left')]:
             rgb, _, depth, w2c, K = d.scene.render(RobotCamera(d.physics, view), (1280, 720),
                 'simulation', None, d.physics.available, d.physics.transforms(), False)
@@ -166,7 +177,9 @@ class LearnedPolicy:
         grip = d.physics.model.joint(r['info']['gripper_driver_joint']).qposadr[0]
         request['observation/gripper_position'] = np.array([np.clip(d.physics.data.qpos[grip]/.8, 0, 1)], np.float32)
         epoch, policy_id, token, process, port = self.epoch, self.policy_id, self.token, self.process, self.port
+        from physicalview.phiview_rigs import camera_contract
         (directory/'request.json').write_text(json.dumps({'prompt': self.prompt, 'policy': policy_id,
+            'cameras': camera_contract(d.physics),
             'joints': request['observation/joint_position'].tolist(),
             'gripper': request['observation/gripper_position'].tolist()}))
 
@@ -191,6 +204,7 @@ class LearnedPolicy:
                 metadata = msgpack_numpy.unpackb(ws.recv(timeout=10))
                 if metadata.get('phiview_session') != token or metadata.get('policy_id') != policy_id:
                     raise ValueError('Policy server identity mismatch')
+                self.server_ready = True
                 ws.send(msgpack_numpy.packb(request))
                 response = ws.recv(timeout=300)
                 if isinstance(response, str):
@@ -203,7 +217,8 @@ class LearnedPolicy:
                     'actions': actions.tolist()}, default=str))
                 return epoch, actions
         self.future = self.executor.submit(infer)
-        self.status.update(state='inferencing', observation=str(directory), log=str(self.log_path))
+        self.status.update(state='inferencing' if self.server_ready else 'loading',
+                           observation=str(directory), log=str(self.log_path))
         d.dirty = True
 
     def advance(self):
@@ -212,6 +227,7 @@ class LearnedPolicy:
         try:
             if self.future is not None:
                 if not self.future.done():
+                    self.status['state'] = 'inferencing' if self.server_ready else 'loading'
                     return True
                 epoch, actions = self.future.result()
                 self.future = None
@@ -228,6 +244,7 @@ class LearnedPolicy:
                 self.demo.dirty = True
             if self.ticks >= self.limit:
                 self.active = False
+                self.demo.physics.robot_status.update(state='finished', success=None)
                 self.status.update(state='finished', success=None,
                     outcome='Policy actions executed; task success has not been scored')
             elif not self.actions:

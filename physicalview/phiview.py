@@ -59,6 +59,8 @@ class Demo:
         rs = next((s for s in scenes if s.name == args.scene), None)
         if rs is None:
             raise ValueError(f'Scene {args.scene!r} not found')
+        from physicalview.phiview_sim import preserve_supports
+        preserve_supports(rs, self.out)
         active_scene = self.out/'active-scene.json'
         if active_scene.exists():
             from dataclasses import replace
@@ -74,7 +76,8 @@ class Demo:
         if active_inpaint.exists():
             from agents.core.common import load_gaussians
             saved = json.loads(active_inpaint.read_text())
-            if saved.get('scene_build', str(rs.out_dir)) == str(rs.out_dir):
+            if (saved.get('scene_build') == str(rs.out_dir) or
+                ('scene_build' not in saved and not active_scene.exists())):
                 self.scene.prompt_backgrounds[frozenset(saved['objects'])] = load_gaussians(saved['path'], device='cuda')
         self.physics = DemoPhysics(self.state, self.out)
         from physicalview.phiview_policy import LearnedPolicy
@@ -164,6 +167,12 @@ class Demo:
             raise ValueError('Select an object first')
         return self.selected
 
+    def select_known(self, name):
+        if getattr(self.click_selection, 'busy', False):
+            raise ValueError('Wait for the current object selection to finish')
+        self.selected = name
+        self.click_selection.status = {'state': 'selected', 'message': 'Object selected.', 'object': name}
+
     def execute(self, msg):
         op = msg.get('op')
         if op == 'input':
@@ -185,7 +194,7 @@ class Demo:
             name = msg.get('object')
             if name not in self.state.objects:
                 raise ValueError('Unknown object')
-            self.selected = name
+            self.select_known(name)
         elif op == 'selection_begin':
             fid = int(msg.get('frame', self.frame_id))
             if fid not in self.frames:
@@ -204,7 +213,7 @@ class Demo:
             box = pixel_box(msg.get('box'), frame[0].shape)
             label = known_object_in_box(frame[0], box)
             if label:
-                self.selected = self.scene.names[label-1]
+                self.select_known(self.scene.names[label-1])
             else:
                 self.click_selection.start(fid, (box[0]+box[2])//2, (box[1]+box[3])//2, box=box)
             self.pinned_frame_id = None
@@ -221,7 +230,7 @@ class Demo:
             if op == 'pick':
                 i = int(mask[y, x])
                 if i:
-                    self.selected = self.scene.names[i-1]
+                    self.select_known(self.scene.names[i-1])
                 else:
                     self.click_selection.start(fid, x, y)
             else:
@@ -255,7 +264,12 @@ class Demo:
                 self.click_selection.status = {'state': 'simulatable',
                     'message': 'Ready for fall, friction, throw and shooting.', 'object': self.selected}
         elif op in ('fall', 'friction', 'throw'):
-            self.physics.perturb(self.selected_required(), op, self.camera.forward(), msg.get('strength', 3))
+            direction = self.camera.forward()
+            if self.camera_view != 'free':
+                from physicalview.phiview_rigs import RobotCamera
+                w2c, _ = RobotCamera(self.physics, self.camera_view).matrices(self.wh)
+                direction = np.linalg.inv(w2c)[:3, 2]
+            self.physics.perturb(self.selected_required(), op, direction, msg.get('strength', 3))
             self.mode = 'simulation'
         elif op == 'friction_value':
             self.physics.set_friction(self.selected_required(), msg['value'])
@@ -311,6 +325,8 @@ class Demo:
             name = self.selected_required()
             if op == 'robot':
                 self.physics.add_robot(name, camera_position=self.camera.position)
+                from physicalview.phiview_policy import POLICY_LABELS
+                self.physics.robot_status['controller'] = POLICY_LABELS[self.policy.policy_id]
             elif self.policy.policy_id == 'scripted_ik':
                 self.physics.command_robot(name, str(msg.get('command', ''))[:500], camera_position=self.camera.position)
             else:
@@ -473,6 +489,7 @@ class Demo:
             restore_objects(state, self.out)
             self.state = state; self.scene = GaussianScene(state)
             self.policy.stop()
+            self.click_selection.status = {'state': 'idle'}
             self.selected = None; self.camera_view = 'free'
             self.frames.clear(); self.frame_images.clear()
             if self.physics.renderer:
@@ -653,6 +670,7 @@ def main(argv=None):
         pass
     finally:
         demo.stop.set(); server.shutdown()
+        demo.policy.close()
         save_json(demo.out/'final-status.json', demo.status())
         demo.audit.close()
         if demo.physics.renderer:

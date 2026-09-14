@@ -11,6 +11,7 @@ import numpy as np
 
 
 def choose_mask(masks, scores, x, y, box=None):
+    import cv2
     masks = np.asarray(masks, dtype=bool)
     scores = np.asarray(scores).reshape(-1)
     if masks.ndim != 3 or len(masks) != len(scores):
@@ -22,6 +23,17 @@ def choose_mask(masks, scores, x, y, box=None):
         b = np.asarray(box)
         if b.shape != (4,) or not np.isfinite(b).all() or not (0 <= b[0] < b[2] <= w and 0 <= b[1] < b[3] <= h):
             raise ValueError('Box outside image')
+    # SAM can return disconnected distractors inside a loose rectangle. Keep the
+    # component at the prompt center, or the largest visible component for a
+    # hollow/occluded object whose center lies in empty space.
+    focused = []
+    for mask in masks:
+        _, labels, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), 8)
+        component = int(labels[y, x])
+        if component == 0 and box is not None and len(stats) > 1:
+            component = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+        focused.append(labels == component if component else np.zeros_like(mask))
+    masks = np.asarray(focused)
     def matches(mask):
         if box is None:
             return mask[y, x]

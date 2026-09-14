@@ -5,14 +5,16 @@ and physics on the server. The browser displays JPEGs and sends input events.
 
 * Click selects a known object or requests a SAM3 point mask for a new region.
 * Left-drag draws a bounding box. A dominant existing object is selected directly;
-  otherwise SAM3 receives the box on the exact displayed frame. Dragging pauses
+  otherwise SAM3 receives the box on the exact displayed frame. Disconnected
+  distractors are removed from the prompted mask. Dragging pauses
   physics and pins that frame for up to 60 seconds. Right-drag still rotates the
   free camera. Selected objects stay bright red with a white outline when other
   highlights are disabled.
 * **Make simulatable** creates a convex collision proxy from the selected visible
   Gaussian surface. Hidden geometry is unknown; mass and friction are unmeasured
   defaults. Object records and proxies are scoped to their source build so IDs
-  from rediscovery cannot inherit an unrelated collision body.
+  from rediscovery cannot inherit an unrelated collision body. Existing primitive
+  floor/table supports survive rediscovery; no new support geometry is inferred.
 
 Robot hardware and control policies have separate selectors. The installed rigs
 are Franka with Robotiq 2F-85 (DROID) and Franka with its native Panda hand. π0.5
@@ -30,7 +32,7 @@ calibration measurements from a physical camera in the scanned room. Choose
 The two π0.5 checkpoint choices come from PhiRoom's policy registry. Executing a
 command starts one private, session-owned checkpoint server using the configured
 `openpi` interpreter. It does not connect to arbitrary existing policy servers.
-First loading and JIT compilation can take minutes. Status shows loading,
+The installed base π0.5 checkpoint is the default control model. First loading and JIT compilation can take minutes. Status shows loading,
 inference, execution, or failure. Checkpoint and response receipts are stored in
 the session's `policies/` directory.
 

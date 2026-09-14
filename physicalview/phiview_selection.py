@@ -133,7 +133,7 @@ class ClickSelection:
             "box_xyxy": box,
         }
         (work / "camera.json").write_text(json.dumps(camera, indent=2))
-        self.status = {"state": "running", "message": "Finding the clicked object…"}
+        self.status = {"state": "running", "message": "Finding the boxed object…" if box else "Finding the clicked object…"}
 
         def worker():
             try:

@@ -13,6 +13,7 @@ from physicalview.phiview_point_segment import choose_mask
 from physicalview.phiview_policy import apply_action, validate_actions
 from physicalview.phiview_rigs import build_robot, RobotCamera
 from physicalview.phiview_selection import restore_objects
+from physicalview.phiview_sim import preserve_supports, DemoPhysics
 
 
 def test_selected_object_is_red_when_other_highlights_are_off():
@@ -48,6 +49,15 @@ def test_box_prompt_can_select_hollow_object_without_mask_at_center():
         choose_mask([mask], [.9], 10, 10)
     with pytest.raises(ValueError):
         choose_mask([mask], [.9], 10, 10, (-1, 4, 16, 16))
+
+
+def test_box_mask_drops_disconnected_distractors():
+    mask = np.zeros((60, 60), bool)
+    mask[25:35, 25:35] = True
+    mask[40:55, 20:50] = True
+    mask[5:10, 5:10] = True
+    selected, _ = choose_mask([mask], [.9], 30, 30, (15, 15, 55, 55))
+    assert selected.sum() == 100 and selected[30, 30] and not selected[45, 30]
 
 
 def test_box_routes_unknown_region_to_sam_and_rejects_stale_frame():
@@ -118,3 +128,37 @@ def test_policy_action_contract_rejects_bad_chunks():
     for value in (np.zeros((0, 8)), np.zeros((15, 7)), np.full((15, 8), np.nan), np.ones((15, 8))*2):
         with pytest.raises(ValueError):
             validate_actions(value)
+
+
+def test_rediscovery_preserves_supports_without_old_dynamic_object_ids(tmp_path):
+    export = tmp_path/'old'/'sim_export'
+    export.mkdir(parents=True)
+    (export/'scene.xml').write_text('''<mujoco><worldbody>
+      <geom name="floor" type="plane" size="5 5 .1"/>
+      <geom name="table" type="box" size=".5 .5 .05" pos="0 0 .7"/>
+      <body name="obj_00"><freejoint/><geom type="sphere" size=".1"/></body>
+      </worldbody></mujoco>''')
+    result = SimpleNamespace(out_dir=tmp_path/'old', splat_ply=tmp_path/'original.ply')
+    preserve_supports(result, tmp_path)
+    result.out_dir = tmp_path/'new'
+    state = SimpleNamespace(result_set=result, scene_xml=None, objects={})
+    sim = DemoPhysics(state, tmp_path)
+    assert sim.model.geom('floor').id >= 0 and sim.model.geom('table').id >= 0
+    assert not sim.available
+    assert 'obj_00' not in [sim.model.body(i).name for i in range(sim.model.nbody)]
+
+
+def test_stopped_inference_cannot_resume_physics():
+    from concurrent.futures import Future
+    from physicalview.phiview_policy import LearnedPolicy
+    policy = LearnedPolicy.__new__(LearnedPolicy)
+    policy.active = True
+    policy.actions = [np.ones(8)]
+    policy.epoch = 2
+    policy.status = {'state': 'inferencing'}
+    policy.demo = SimpleNamespace(physics=SimpleNamespace(running=True))
+    policy.future = Future()
+    policy.stop()
+    policy.future.set_result((2, np.ones((15, 8))))
+    assert not policy.advance()
+    assert policy.epoch == 3 and not policy.actions and not policy.demo.physics.running

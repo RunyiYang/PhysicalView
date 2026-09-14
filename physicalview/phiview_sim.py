@@ -2,7 +2,30 @@
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
+import hashlib
+import copy
 import numpy as np
+
+
+def support_path(result_set, out):
+    key = hashlib.sha256(str(result_set.splat_ply).encode()).hexdigest()[:16]
+    return out / f'static-supports-{key}.xml'
+
+
+def preserve_supports(result_set, out):
+    """Keep existing primitive room supports when discovery replaces object IDs."""
+    source = result_set.out_dir / 'sim_export' / 'scene.xml'
+    if not source.exists():
+        return
+    root = ET.Element('mujoco')
+    world = ET.SubElement(root, 'worldbody')
+    for geom in ET.parse(source).getroot().findall('worldbody/geom'):
+        if geom.get('type') in ('plane', 'box', 'sphere', 'capsule', 'cylinder', 'ellipsoid'):
+            saved = copy.deepcopy(geom)
+            saved.attrib.pop('material', None)
+            world.append(saved)
+    if len(world):
+        ET.ElementTree(root).write(support_path(result_set, out))
 
 
 class DemoPhysics:
@@ -10,7 +33,9 @@ class DemoPhysics:
         import mujoco
         self.state, self.out = state, out
         if state.scene_xml is None:
-            root = ET.ElementTree(ET.fromstring('<mujoco><asset/><worldbody/></mujoco>'))
+            cached = support_path(state.result_set, out) if hasattr(state, 'result_set') else None
+            root = ET.parse(cached) if cached and cached.exists() else ET.ElementTree(
+                ET.fromstring('<mujoco><asset/><worldbody/></mujoco>'))
         else:
             root = ET.parse(state.scene_xml)
         compiler = root.find('compiler')

@@ -62,11 +62,12 @@ among viewers. Job duration defaults to four hours. Files persist after the job 
   images are deleted only in the new copy, so the new prompt must execute. A guard rejects
   skipped/cached edits and LaMa fallback. Completed prompt versions are keyed by the exact
   removed-object set. The panel reports queued/running/failed/succeeded state and job paths.
-- Place robot puts a Panda/Robotiq arm within reach of the selected object. Execute accepts
-  reach, lift, pick/place left/right, move left/right, and push left/right commands. It runs
-  bounded scripted IK through joint actuators and physical contacts. Unsupported commands
-  are rejected. Reports distinguish completed motion, IK error and measured lift; no motion
-  completion is labelled as grasp or task success.
+- Robot hardware and policy selectors choose the DROID Franka/Robotiq or native
+  Panda hand, and scripted IK or the installed π0.5 checkpoint variants. The
+  third-person exterior and wrist views use actual simulated camera poses.
+  See [selection, robot and camera contracts](PHIVIEW_SELECTION_ROBOT.md) for
+  mouse gestures, model loading, image preprocessing and control semantics.
+  Motion completion is not labeled as grasp or task success.
 
 ## Environment
 
