@@ -404,6 +404,11 @@ class DemoPhysics:
             return rgb
         h, w = rgb.shape[:2]
         m, d = self.model, self.data
+        # MuJoCo scales clipping distances by scene extent. Inactive projectiles
+        # parked below the room enlarge that extent and otherwise cut through
+        # nearby robot links. Match the GS renderer's physical clipping range.
+        m.vis.map.znear = .01 / max(float(m.stat.extent), 1e-6)
+        m.vis.map.zfar = 100. / max(float(m.stat.extent), 1e-6)
         if self.renderer is None or self.renderer.width != w or self.renderer.height != h:
             if self.renderer:
                 self.renderer.close()
