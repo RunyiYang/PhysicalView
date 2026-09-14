@@ -16,10 +16,10 @@ and physics on the server. The browser displays JPEGs and sends input events.
   from rediscovery cannot inherit an unrelated collision body. Existing primitive
   floor/table supports survive rediscovery; no new support geometry is inferred.
 
-Robot hardware and control policies have separate selectors. The installed rigs
-are Franka with Robotiq 2F-85 (DROID) and Franka with its native Panda hand. π0.5
-DROID policies require the former. Scripted IK works with either and remains
-explicitly labeled as scripted.
+The viewer selector chooses the control policy only: base π0.5 DROID, the
+sim co-trained π0.5 variant, or explicitly labeled scripted IK. Robot hardware is
+fixed to the DROID Franka with Robotiq 2F-85 preset. The backend retains its modular
+rig adapters for pipeline tools, but the viewer does not offer a hardware selector.
 
 The third-person view is an actual fixed exterior MuJoCo camera, positioned
 at `[0.05, 0.57, 0.66]` m in the DROID base frame and aimed at
@@ -54,7 +54,7 @@ contracts; `phiview_policy.py` handles observations and asynchronous control;
 
 On scene `fb5a96b1a2_factory`, implementation `27a6b47` passed 128 CPU tests
 (50 explicit prerequisite skips), 31 focused checks in A6000 allocation `898843`,
-and Chromium checks for click selection, reversed box discovery, red highlighting
+and initial Chromium checks for click selection, reversed box discovery, red highlighting
 with other masks disabled, Make simulatable, hardware switching, fixed exterior
 and wrist cameras, and free navigation. The browser transferred no 3D assets and
 created no canvas. A fresh SAM3 box mask isolated the visible chair surface; its
@@ -69,4 +69,6 @@ implementation check. These checks establish runtime integration, not task succe
 Evidence is under PhiRoom's ignored output directory
 `outputs/demo-fb5a96b1a2-redmask/live/`: `selection-camera-check-27a6b47/`,
 `session-selection-final-test/policies/`, and `robot-camera-check/`.
-The original v2.0.0 release media is unchanged.
+The original v2.0.0 release media is unchanged. After user clarification, the
+hardware dropdown was removed; the viewer exposes only the policy selector and
+keeps DROID hardware fixed.

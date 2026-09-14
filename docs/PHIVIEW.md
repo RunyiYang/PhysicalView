@@ -62,8 +62,8 @@ among viewers. Job duration defaults to four hours. Files persist after the job 
   images are deleted only in the new copy, so the new prompt must execute. A guard rejects
   skipped/cached edits and LaMa fallback. Completed prompt versions are keyed by the exact
   removed-object set. The panel reports queued/running/failed/succeeded state and job paths.
-- Robot hardware and policy selectors choose the DROID Franka/Robotiq or native
-  Panda hand, and scripted IK or the installed π0.5 checkpoint variants. The
+- The control-policy selector chooses scripted IK or the installed π0.5
+  checkpoint variants. Viewer hardware stays fixed to DROID Franka/Robotiq. The
   third-person exterior and wrist views use actual simulated camera poses.
   See [selection, robot and camera contracts](PHIVIEW_SELECTION_ROBOT.md) for
   mouse gestures, model loading, image preprocessing and control semantics.
