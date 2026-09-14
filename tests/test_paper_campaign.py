@@ -35,3 +35,19 @@ def test_bounded_retry_archives_replaced_group_and_retains_unrelated_evidence(tm
     assert not (tmp_path/'h_prompt_inpaint').exists()
     assert (tmp_path/'a_original/frame.png').read_bytes()==b'original pixels'
     assert json.loads((tmp_path/'features.json').read_text())==records
+
+
+def test_behavior_capture_does_not_fuse_different_object_states_or_episodes():
+    import numpy as np
+    from physicalview.paper_behavior import select_consistent_clips
+    def pose(v):
+        T=np.eye(4);T[:3,3]=v[:3];return T
+    def clip(ep,index,cup_x):
+        return {'ep':ep,'clip_id':f'{ep}-{index}','D':np.eye(4),'cam_frames':[{},{}],
+            'traj':{name:np.array([[x,0,0,0,0,0,1]]) for name,x in [('floor',0),('wall',1),('table',2),('cup',cup_x)]}}
+    clips=[clip('a',0,3),clip('a',1,3.001),clip('a',2,3.2),clip('b',0,4)]
+    kept,report=select_consistent_clips(clips,pose)
+    assert [c['clip_id'] for c in kept]==['a-0','a-1']
+    assert report['selected_episode']=='a'
+    assert report['selected_camera_frames']==4
+    assert report['episodes'][0]['audit'][2]['kept'] is False

@@ -18,7 +18,7 @@ def main():
             run_command([cfg.interpreter('studio'),'-m','physicalview.paper_libero','--roster',root/'libero-roster.json','--index',a.index,'--root',cfg.scannetpp_root],{},cfg.package_root,logs,'native-capture')
     else:
         if not (scene/'dslr/colmap/images.txt').exists():
-            run_command([cfg.interpreter('main'),'-m','oracle.capture_generator','extract','--task',row['task'],'--scene-name',sid,'--root',cfg.scannetpp_root,'--episodes',6,'--max-frames',120,'--tasks-config',root/'behavior-tasks.yaml'],{},cfg.repo_root,logs,'wds-extract')
+            run_command([cfg.interpreter('main'),'-m','physicalview.paper_behavior','--task',row['task'],'--scene-name',sid,'--root',cfg.scannetpp_root,'--episodes',6,'--max-frames',120,'--tasks-config',root/'behavior-tasks.yaml'],{},cfg.repo_root,logs,'wds-extract')
         calibration=json.loads((scene/'dslr/nerfstudio/transforms_undistorted.json').read_text())
         scale=calibration['h']/1168.
         os.environ['SIMANY_MIN_BBOX_PX']=str(max(6,round(48*scale)))

@@ -144,3 +144,13 @@ All named geom positions are checked before/after the mapping. The native robot 
 omitted, and choosing a registered generated alternative still rebuilds that body's
 collision model. This is explicitly GT-assisted native-simulator physics, distinct
 from ScanNet++'s reconstructed contact geometry.
+
+BEHAVIOR extraction now explicitly sets `upscale=1` (the upstream extractor otherwise
+automatically upscales to 1280 pixels). It also restricts input views to one episode's
+first static object state, checking shared mesh translations within 2 cm and rotations
+within 5 degrees after registration. It chooses the candidate episode with the most
+consistent observed camera frames and requires at least eight before training.
+`pose-selection.json` retains all acceptance/rejection measurements. Camera alignment
+and this state filtering use dataset mesh trajectories, so these poses are GT-assisted.
+This avoids silently mixing changed manipuland poses across episodes into one static
+Gaussian scene; actual BEHAVIOR extraction remains a pending execution gate.
