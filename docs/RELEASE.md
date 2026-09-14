@@ -39,9 +39,16 @@ conflicts; each original head is retained in the branch audit. Ten block branche
 shared runtime/release branches remain available. SimAny/PhiRoom is a separately pinned
 dependency and was not merged into this repository's history.
 
-GitHub CI runs CPU tests, checks all lockfiles, builds both distributions and tests an
-isolated wheel install. Backend/GPU-only skips are explicit. Merge the reviewed integration
-head only after these checks; preserve the original branch histories with a merge commit.
+GitHub CI is configured to run CPU tests, check all lockfiles, build both distributions
+and test an isolated wheel install. Backend/GPU-only skips are explicit. Preserve the
+original branch histories with a merge commit after validating the integration head.
+
+For this release, GitHub run `34845525682` stopped before any steps ran. Its annotation
+states: **"The job was not started because an Actions budget is preventing further use."**
+Both Python 3.11 and 3.12 suites and the package/install checks were therefore run locally.
+The user-authorized integration proceeds on those recorded checks. GitHub CI is blocked,
+not passing; account budget settings were not changed. Restore Actions capacity to run
+the hosted checks and tag automation. The annotation is retained with the release evidence.
 
 ## Creating a release
 
@@ -58,3 +65,9 @@ head only after these checks; preserve the original branch histories with a merg
 
 Release automation does not change repository visibility, distribute dataset/model assets,
 or certify that every demo screenshot has passed publication review.
+
+When hosted Actions cannot start, prepare the same checked wheel/source distributions
+locally from the clean tagged main checkout. `uv run python tools/release/draft.py --tag
+v0.2.0` prints the draft and asset hashes. Add `--create` to create/upload the draft using
+`GH_TOKEN`, `GITHUB_TOKEN` or the configured GitHub HTTPS credential helper. It refuses
+to overwrite a published release or an asset with a different/unverifiable digest.
