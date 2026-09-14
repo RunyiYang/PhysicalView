@@ -59,6 +59,13 @@ class Demo:
         rs = next((s for s in scenes if s.name == args.scene), None)
         if rs is None:
             raise ValueError(f'Scene {args.scene!r} not found')
+        active_scene = self.out/'active-scene.json'
+        if active_scene.exists():
+            from dataclasses import replace
+            saved = json.loads(active_scene.read_text())
+            if saved['scene_splat'] != str(rs.splat_ply):
+                raise ValueError('Saved build belongs to a different scene')
+            rs = replace(rs, out_dir=Path(saved['out_dir']))
         self.state = load_scene(self.config, rs, device='cuda')
         from physicalview.phiview_selection import ClickSelection, restore_objects
         restore_objects(self.state, self.out)
@@ -67,8 +74,12 @@ class Demo:
         if active_inpaint.exists():
             from agents.core.common import load_gaussians
             saved = json.loads(active_inpaint.read_text())
-            self.scene.prompt_backgrounds[frozenset(saved['objects'])] = load_gaussians(saved['path'], device='cuda')
+            if saved.get('scene_build', str(rs.out_dir)) == str(rs.out_dir):
+                self.scene.prompt_backgrounds[frozenset(saved['objects'])] = load_gaussians(saved['path'], device='cuda')
         self.physics = DemoPhysics(self.state, self.out)
+        from physicalview.phiview_policy import LearnedPolicy
+        self.policy = LearnedPolicy(self)
+        self.camera_view = 'free'
         self.wh = (args.width, args.height)
         self.native_wh = (self.state.W, self.state.H)
         self.camera_names = sorted(self.state.cameras)
@@ -81,6 +92,8 @@ class Demo:
         self.frame_id = 0
         self.frames = OrderedDict()
         self.frame_images = OrderedDict()
+        self.pinned_frame_id = None
+        self.pin_until = 0.
         self.click_selection = ClickSelection(self)
         self.jpeg = b''
         self.condition = threading.Condition()
@@ -120,6 +133,7 @@ class Demo:
         self.manifest = manifest
 
     def status(self):
+        from physicalview.phiview_rigs import ROBOTS, camera_contract
         objects = []
         for name, rec in self.state.objects.items():
             proposals = ['original'] + [s for s, p in rec.proposals.items() if p.gs_ply]
@@ -137,6 +151,10 @@ class Demo:
                 'gaussians': self.scene.count, 'gpu': self.manifest['hardware'],
                 'running': self.physics.running, 'sim_time': float(self.physics.data.time),
                 'robot': self.physics.robot_status, 'pipeline': self.pipeline_status,
+                'robot_models': ROBOTS, 'robot_model': self.physics.robot_model,
+                'policies': self.policy.choices(), 'policy': self.policy.status,
+                'policy_id': self.policy.policy_id, 'camera_view': self.camera_view,
+                'robot_cameras': camera_contract(self.physics),
                 'error': self.frame_error, 'cameras': self.camera_names,
                 'camera_name': self.camera_name,
                 'projectile_contacts': self.physics.events[-10:]}
@@ -149,6 +167,8 @@ class Demo:
     def execute(self, msg):
         op = msg.get('op')
         if op == 'input':
+            if getattr(self, 'camera_view', 'free') != 'free':
+                return {'ok': True}
             self.keys = [k for k in msg.get('keys', []) if k in 'wasdqe']
             look = np.asarray(msg.get('look', [0, 0]), float)
             if look.shape != (2,) or not np.isfinite(look).all():
@@ -156,11 +176,38 @@ class Demo:
             self.look += np.clip(look, -2000, 2000)
             self.boost = bool(msg.get('boost')); self.last_input = time.monotonic()
             return {'ok': True}
+        if op in ('select', 'selection_begin', 'pick', 'box_select', 'shoot', 'view', 'enable',
+                  'fall', 'friction', 'throw', 'play', 'pause', 'reset', 'variant',
+                  'robot', 'robot_command', 'robot_model', 'policy', 'inpaint', 'generate', 'discover', 'build'):
+            if hasattr(self, 'policy') and self.policy.active:
+                self.policy.stop()
         if op == 'select':
             name = msg.get('object')
             if name not in self.state.objects:
                 raise ValueError('Unknown object')
             self.selected = name
+        elif op == 'selection_begin':
+            fid = int(msg.get('frame', self.frame_id))
+            if fid not in self.frames:
+                raise ValueError('Displayed frame expired; click the refreshed image')
+            self.pinned_frame_id = fid; self.pin_until = time.monotonic()+60
+            self.physics.running = False
+            self.keys = []; self.look[:] = 0
+        elif op == 'selection_end':
+            self.pinned_frame_id = None
+        elif op == 'box_select':
+            from physicalview.phiview_box import pixel_box, known_object_in_box
+            fid = int(msg.get('frame', self.frame_id))
+            frame = self.frames.get(fid)
+            if frame is None:
+                raise ValueError('Displayed frame expired; draw the box again')
+            box = pixel_box(msg.get('box'), frame[0].shape)
+            label = known_object_in_box(frame[0], box)
+            if label:
+                self.selected = self.scene.names[label-1]
+            else:
+                self.click_selection.start(fid, (box[0]+box[2])//2, (box[1]+box[3])//2, box=box)
+            self.pinned_frame_id = None
         elif op == 'pick' or op == 'shoot':
             fid = int(msg.get('frame', self.frame_id))
             frame = self.frames.get(fid)
@@ -200,8 +247,9 @@ class Demo:
             for name in names:
                 if name not in self.physics.available:
                     from physicalview.phiview_proxy import install_proxy
+                    from physicalview.phiview_selection import object_directory
                     points = self.scene.raw['means'][self.scene.indices[name]].detach().cpu().numpy()
-                    install_proxy(self.physics, name, points, self.out/'interactive_objects'/name)
+                    install_proxy(self.physics, name, points, object_directory(self.state, self.out, name))
             self.physics.enable(names); self.mode = 'simulation'
             if any(self.state.objects[n].meta.get('interactive') for n in names):
                 self.click_selection.status = {'state': 'simulatable',
@@ -229,12 +277,46 @@ class Demo:
                 raise
             self.mode = 'simulation'
             self.physics.running = False
+        elif op == 'robot_model':
+            from physicalview.phiview_rigs import validate_robot
+            model = validate_robot(msg.get('model'))
+            if model != 'droid' and self.policy.policy_id != 'scripted_ik':
+                raise ValueError('Choose Scripted IK before using the native Panda hand')
+            previous = self.physics.robot_model
+            self.physics.robot_model = model
+            try:
+                if self.physics.robot:
+                    self.physics.add_robot(self.physics.robot['target'], camera_position=self.camera.position)
+            except Exception:
+                self.physics.robot_model = previous
+                raise
+        elif op == 'policy':
+            name = msg.get('policy')
+            if name != 'scripted_ik' and self.physics.robot_model != 'droid':
+                raise ValueError('Choose the DROID Franka / Robotiq robot for π0.5')
+            self.policy.choose(name)
+        elif op == 'camera_view':
+            view = msg.get('view')
+            if view not in ('free', 'exterior', 'wrist'):
+                raise ValueError('Unknown camera view')
+            if view != 'free':
+                if self.physics.robot is None:
+                    raise ValueError('Place a robot before choosing its cameras')
+                self.mode = 'simulation'
+            self.camera_view = view
+            if view != 'free':
+                self.wh = (1280, 720)
+            self.keys = []; self.look[:] = 0
         elif op in ('robot', 'robot_command'):
             name = self.selected_required()
             if op == 'robot':
                 self.physics.add_robot(name, camera_position=self.camera.position)
-            else:
+            elif self.policy.policy_id == 'scripted_ik':
                 self.physics.command_robot(name, str(msg.get('command', ''))[:500], camera_position=self.camera.position)
+            else:
+                if self.physics.robot is None or self.physics.robot['target'] != name:
+                    self.physics.add_robot(name, camera_position=self.camera.position)
+                self.policy.start(str(msg.get('command', ''))[:500], msg.get('ticks', 150))
             self.mode = 'simulation'
         elif op == 'camera':
             name = msg.get('name', self.camera_name)
@@ -242,7 +324,9 @@ class Demo:
                 raise ValueError('Unknown source camera')
             self.camera = FlyCamera.from_w2c(self.state.cameras[name], self.camera.fov)
             self.camera_name = name
+            self.camera_view = 'free'
         elif op == 'focus':
+            self.camera_view = 'free'
             name = self.selected_required()
             p = np.asarray(self.state.objects[name].meta['centroid'])
             self.camera.position = p + [.6, .7, .45]
@@ -254,6 +338,8 @@ class Demo:
             choices = {'720p': (1280, 720), '1080p': (1920, 1080), 'native': self.native_wh}
             if wh not in choices:
                 raise ValueError('Unknown resolution')
+            if self.camera_view != 'free' and wh == 'native':
+                raise ValueError('Robot cameras use 16:9; choose 720p or 1080p')
             self.wh = choices[wh]
         elif op == 'speed':
             value = float(msg['value'])
@@ -380,19 +466,29 @@ class Demo:
                 self.selected = inpaint_names[0]; self.mode = 'clean_selected'
             self.physics.running = False
             save_json(self.out/'active-inpaint.json', {'path': work/'inpaint'/'clean_background.ply',
-                                                      'objects': inpaint_names})
+                                                      'objects': inpaint_names, 'scene_build': str(self.state.result_set.out_dir)})
         else:
             state = load_scene(self.config, replace(self.state.result_set, out_dir=work), device='cuda')
+            from physicalview.phiview_selection import restore_objects
+            restore_objects(state, self.out)
             self.state = state; self.scene = GaussianScene(state)
+            self.policy.stop()
+            self.selected = None; self.camera_view = 'free'
+            self.frames.clear(); self.frame_images.clear()
             if self.physics.renderer:
                 self.physics.renderer.close()
             self.physics = DemoPhysics(state, self.out)
+            save_json(self.out/'active-scene.json', {'out_dir': work, 'scene_splat': str(state.result_set.splat_ply)})
         self.dirty = True
 
     def render(self):
         from PIL import Image
         t0 = time.monotonic()
-        image, mask, depth, w2c, K = self.scene.render(self.camera, self.wh, self.mode, self.selected,
+        from physicalview.phiview_rigs import RobotCamera
+        if self.camera_view != 'free' and self.physics.robot is None:
+            self.camera_view = 'free'
+        camera = self.camera if self.camera_view == 'free' else RobotCamera(self.physics, self.camera_view)
+        image, mask, depth, w2c, K = self.scene.render(camera, self.wh, self.mode, self.selected,
             self.physics.available, self.physics.transforms() if self.mode == 'simulation' else {}, self.highlight)
         if self.mode == 'simulation':
             image = self.physics.overlay(image, depth, w2c, K)
@@ -406,6 +502,9 @@ class Demo:
             self.frames[self.frame_id] = (mask, depth, w2c, K)
             self.frame_images[self.frame_id] = self.scene.last_rgb
             while len(self.frames) > 8:
+                first = next(iter(self.frames))
+                if first == self.pinned_frame_id and time.monotonic() < self.pin_until:
+                    self.frames.move_to_end(first)
                 old, _ = self.frames.popitem(last=False)
                 self.frame_images.pop(old, None)
             self.jpeg = buf.getvalue()
@@ -443,7 +542,8 @@ class Demo:
                 moving = bool(self.keys) or bool(np.any(self.look))
                 if moving:
                     self.camera.update(self.keys, dt, self.look, self.boost); self.look[:] = 0
-                if self.physics.running:
+                policy_owns_step = self.policy.advance()
+                if self.physics.running and not policy_owns_step:
                     self.physics.step(dt)
                 if self.dirty or moving or self.physics.running:
                     self.render(); self.dirty = False

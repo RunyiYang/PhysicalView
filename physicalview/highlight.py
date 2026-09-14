@@ -25,14 +25,14 @@ def red_mask(rgb, mask, *, opacity=.82, outline_px=2):
     return np.clip(out, 0, 1)
 
 
-def highlight_objects(rgb, labels, selected_id=None):
-    """Red object masks; stronger fill and a thicker contour for the selection."""
+def highlight_objects(rgb, labels, selected_id=None, *, show_all=True):
+    """Keep selection visible independently of the discovered-object overlay."""
     labels = np.asarray(labels)
-    out = red_mask(rgb, labels > 0, opacity=.52, outline_px=1)
+    out = red_mask(rgb, labels > 0, opacity=.22, outline_px=1) if show_all else np.asarray(rgb).copy()
     if selected_id is not None:
         selected = labels == selected_id
         if selected.any():
-            focused = red_mask(rgb, selected, opacity=.88, outline_px=3)
+            focused = red_mask(rgb, selected, opacity=.94, outline_px=3)
             area = cv2.dilate(selected.astype(np.uint8), np.ones((7, 7), np.uint8)) > 0
             out[area] = focused[area]
     return out

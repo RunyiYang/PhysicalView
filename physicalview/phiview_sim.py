@@ -39,6 +39,7 @@ class DemoPhysics:
         self.data = mujoco.MjData(self.model)
         mujoco.mj_forward(self.model, self.data)
         self.robot = None
+        self.robot_model = 'droid'
         self.renderer = None
         self.running = False
         self.projectile = 0
@@ -158,7 +159,7 @@ class DemoPhysics:
         self.robot_status = {'state': 'idle' if self.robot else 'absent'}
         if self.robot:
             self.data.ctrl[self.robot['aids']] = self.data.qpos[self.robot['qadr']]
-            self.data.ctrl[self.robot['grip']] = 0
+            self.data.ctrl[self.robot['grip']] = self.robot['info']['grip_open']
         mujoco.mj_forward(self.model, self.data)
 
     def parameters(self, name):
@@ -252,7 +253,7 @@ class DemoPhysics:
 
     def add_robot(self, name, camera_position=None):
         import mujoco
-        from robo.rigs.pi05_rig import build_scene_model
+        from physicalview.phiview_rigs import build_robot
         self.enable([name])
         self.reset()
         target = np.array(self.initial[name][0])
@@ -288,7 +289,7 @@ class DemoPhysics:
             ET.SubElement(stand,'geom',name='robot/pedestal',type='box',size=f'.12 .12 {height/2}',
                           rgba='.25 .3 .35 1',friction='.8 .005 .0001',contype='1',conaffinity='1')
             source_xml=self.out/'robot_mount_scene.xml';root.write(source_xml)
-        model, info = build_scene_model(source_xml, base, yaw, table_box=None, exclude_objects=())
+        model, info = build_robot(self.robot_model, source_xml, base, yaw)
         if self.renderer:
             self.renderer.close(); self.renderer = None
         self.model, self.data = model, mujoco.MjData(model)
@@ -298,10 +299,11 @@ class DemoPhysics:
         self.data.qpos[qadr] = info['home']; self.data.ctrl[aids] = info['home']
         self.robot = {'qadr': qadr, 'dadr': dadr, 'aids': aids,
                       'grip': model.actuator(info['gripper_actuator']).id,
-                      'base': base.tolist(), 'target': name}
+                      'base': base.tolist(), 'target': name, 'info': info, 'model': self.robot_model}
+        self.data.ctrl[self.robot['grip']] = info['grip_open']
         mujoco.mj_forward(model, self.data)
         self.initial = self._poses(); self.initial_qpos = self.data.qpos.copy()
-        self.robot_status = {'state': 'idle', 'base': base.tolist(), 'controller': 'scripted IK with physical contacts',
+        self.robot_status = {'state': 'idle', 'robot_model': self.robot_model, 'base': base.tolist(), 'controller': 'scripted IK with physical contacts',
                              'placement': {'method':'offset beside camera-facing direction','angle_degrees':float(placement.get('angle_degrees',50.)), 'radius_m':float(placement.get('radius_m',.5)), 'height_offset_m':float(placement.get('height_offset_m',-.04))},
                              'mount_support_verified': False}
         if pedestal_bottom is not None:
@@ -313,7 +315,7 @@ class DemoPhysics:
         allowed = ('reach', 'pick', 'lift', 'place', 'move', 'push')
         if not any(word in text.split() for word in allowed):
             raise ValueError('Supported commands: reach, lift, pick/place left/right, push left/right')
-        if self.robot is None or self.robot['target'] != name:
+        if self.robot is None or self.robot['target'] != name or self.robot['model'] != self.robot_model:
             self.add_robot(name, camera_position=camera_position)
         self.enable([name])
         p = self.data.xpos[self.model.body(name).id].copy()
@@ -345,12 +347,12 @@ class DemoPhysics:
         r = self.robot
         point, grip = self.plan[self.plan_step]
         # Down-facing pinch frame. Joint targets are applied through actuators only.
-        result = solve_ik(self.model, self.data, 'robot/2f85/pinch', point,
+        result = solve_ik(self.model, self.data, r['info']['pinch_site'], point,
                           [0, 1, 0, 0], r['qadr'], r['dadr'], iters=35, pos_tol=.015, rot_tol=.15)
         q = self.data.qpos[r['qadr']]
         previous_target = self.data.ctrl[r['aids']].copy()
         self.data.ctrl[r['aids']] = previous_target + np.clip(result.q-previous_target, -.08, .08)
-        self.data.ctrl[r['grip']] = 255 if grip else 0
+        self.data.ctrl[r['grip']] = r['info']['grip_closed' if grip else 'grip_open']
         self.plan_ticks += 1
         height = float(self.data.xpos[self.model.body(r['target']).id, 2])-self.robot_start_z
         self.robot_status['max_lift_m'] = max(self.robot_status['max_lift_m'], height)
@@ -358,8 +360,8 @@ class DemoPhysics:
         self.robot_status['max_target_displacement_m'] = max(self.robot_status['max_target_displacement_m'], displacement)
         self.robot_status['lifted'] = self.robot_status['max_lift_m'] > .05
         self.robot_status['ik_solution_error_m'] = float(result.pos_err)
-        self.robot_status['ik_error_m'] = float(np.linalg.norm(self.data.site('robot/2f85/pinch').xpos-point))
-        self.robot_status['end_effector_position'] = self.data.site('robot/2f85/pinch').xpos.tolist()
+        self.robot_status['ik_error_m'] = float(np.linalg.norm(self.data.site(r['info']['pinch_site']).xpos-point))
+        self.robot_status['end_effector_position'] = self.data.site(r['info']['pinch_site']).xpos.tolist()
         self.robot_status['target_position'] = self.data.xpos[self.model.body(r['target']).id].tolist()
         if self.plan_ticks >= 60:
             self.plan_step += 1; self.plan_ticks = 0

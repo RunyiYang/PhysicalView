@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -63,17 +64,31 @@ def record_from_meta(directory, meta):
     )
 
 
+def object_directory(state, out, name):
+    build = str(state.result_set.out_dir.resolve())
+    namespace = hashlib.sha256(build.encode()).hexdigest()[:16]
+    return out / 'interactive_objects' / namespace / name
+
+
 def restore_objects(state, out):
-    for directory in sorted((out / "interactive_objects").glob("obj_*")):
+    current = object_directory(state, out, 'obj_00').parent
+    directories = sorted((out / 'interactive_objects').glob('obj_*')) + sorted(current.glob('obj_*'))
+    for directory in directories:
+        matching = directory.parent == current
         meta_path = directory / "selection.json"
         if meta_path.exists():
             meta = json.loads(meta_path.read_text())
             if meta["scene_splat"] != str(state.result_set.splat_ply):
-                raise ValueError("Interactive selection belongs to a different scene")
-            if meta["name"] not in state.objects:
-                state.objects[meta["name"]] = record_from_meta(directory, meta)
+                continue
+            if meta.get('scene_build', str(state.result_set.out_dir)) != str(state.result_set.out_dir):
+                continue
+            # Legacy IDs can collide after SAM3 rediscovery. Never bind by name alone.
+            if meta['name'] in state.objects:
+                continue
+            state.objects[meta["name"]] = record_from_meta(directory, meta)
+            matching = True
         proxy_path = directory / "proxy.json"
-        if proxy_path.exists() and directory.name in state.objects:
+        if matching and proxy_path.exists() and directory.name in state.objects:
             proxy = json.loads(proxy_path.read_text())
             state.objects[directory.name].meta["interactive_proxy"] = proxy
             state.objects[directory.name].physics = proxy["physics"]
@@ -92,14 +107,15 @@ class ClickSelection:
             self.thread is not None and self.thread.is_alive()
         )
 
-    def start(self, fid, x, y):
+    def start(self, fid, x, y, box=None):
         d = self.demo
         if self.busy or (d.pipeline_thread and d.pipeline_thread.is_alive()):
             raise ValueError("Wait for the current object or scene build to finish")
         if fid not in d.frame_images:
             raise ValueError("Displayed frame expired; click the refreshed image")
         _, depth, w2c, K = d.frames[fid]
-        if not np.isfinite(depth[y, x]) or depth[y, x] <= 0.01:
+        sample = depth[y:y+1, x:x+1] if box is None else depth[box[1]:box[3], box[0]:box[2]]
+        if not (np.isfinite(sample) & (sample > .01)).any():
             raise ValueError("No reconstructed surface at this point")
         d.physics.running = False
         d.selected = None
@@ -114,6 +130,7 @@ class ClickSelection:
             "w2c": w2c.tolist(),
             "K": K.tolist(),
             "point_xy": [x, y],
+            "box_xyxy": box,
         }
         (work / "camera.json").write_text(json.dumps(camera, indent=2))
         self.status = {"state": "running", "message": "Finding the clicked object…"}
@@ -127,11 +144,8 @@ class ClickSelection:
                     str(work / "image.png"),
                     "--out",
                     str(work),
-                    "--x",
-                    str(x),
-                    "--y",
-                    str(y),
                 ]
+                argv += ['--box', *map(str, box)] if box is not None else ['--x', str(x), '--y', str(y)]
                 env = {
                     **os.environ,
                     "HF_HOME": "/group/worldcept/hf_cache",
@@ -176,7 +190,7 @@ class ClickSelection:
             lo, hi = np.quantile(points, [0.001, 0.999], axis=0)
             index = max((rec.index for rec in d.state.objects.values()), default=-1) + 1
             name = f"obj_{index:02d}"
-            directory = d.out / "interactive_objects" / name
+            directory = object_directory(d.state, d.out, name)
             directory.mkdir(parents=True)
             np.save(directory / "gaussian_indices.npy", idx.cpu().numpy())
             meta = {
@@ -186,8 +200,9 @@ class ClickSelection:
                 "centroid": ((lo + hi) / 2).tolist(),
                 "aabb": [lo.tolist(), hi.tolist()],
                 "scene_splat": str(d.state.result_set.splat_ply),
+                "scene_build": str(d.state.result_set.out_dir),
                 "selection_work": str(work),
-                "mask_source": "SAM3 point mask lifted to visible Gaussians (partial surface)",
+                "mask_source": "SAM3 prompted mask lifted to visible Gaussians (partial surface)",
                 "gaussians": len(idx),
                 "interactive": True,
             }

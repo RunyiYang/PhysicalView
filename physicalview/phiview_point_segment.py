@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 
 
-def choose_mask(masks, scores, x, y):
+def choose_mask(masks, scores, x, y, box=None):
     masks = np.asarray(masks, dtype=bool)
     scores = np.asarray(scores).reshape(-1)
     if masks.ndim != 3 or len(masks) != len(scores):
@@ -18,10 +18,20 @@ def choose_mask(masks, scores, x, y):
     h, w = masks.shape[1:]
     if not (0 <= x < w and 0 <= y < h):
         raise ValueError("Click outside image")
+    if box is not None:
+        b = np.asarray(box)
+        if b.shape != (4,) or not np.isfinite(b).all() or not (0 <= b[0] < b[2] <= w and 0 <= b[1] < b[3] <= h):
+            raise ValueError('Box outside image')
+    def matches(mask):
+        if box is None:
+            return mask[y, x]
+        x0, y0, x1, y1 = box
+        return mask[y0:y1, x0:x1].sum() >= .8*mask.sum()
+
     valid = [
         i
         for i, mask in enumerate(masks)
-        if mask[y, x]
+        if matches(mask)
         and 24 <= mask.sum() <= h * w * 0.5
         and np.isfinite(scores[i])
         and scores[i] >= 0.5
@@ -38,12 +48,24 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--image", required=True)
     ap.add_argument("--out", required=True, type=Path)
-    ap.add_argument("--x", required=True, type=int)
-    ap.add_argument("--y", required=True, type=int)
+    ap.add_argument("--x", type=int)
+    ap.add_argument("--y", type=int)
+    ap.add_argument("--box", nargs=4, type=int)
     ap.add_argument("--checkpoint", default=os.environ.get("PHIVIEW_SAM3_CHECKPOINT"))
     args = ap.parse_args()
-    import torch
+    if args.box is not None:
+        args.x = (args.box[0]+args.box[2])//2
+        args.y = (args.box[1]+args.box[3])//2
+    elif args.x is None or args.y is None:
+        ap.error('Supply --x and --y, or --box')
     from PIL import Image
+    image = Image.open(args.image).convert('RGB')
+    w, h = image.size
+    if args.box and not (0 <= args.box[0] < args.box[2] <= w and 0 <= args.box[1] < args.box[3] <= h):
+        ap.error('Box outside image')
+    if not (0 <= args.x < w and 0 <= args.y < h):
+        ap.error('Click outside image')
+    import torch
     from sam3.model_builder import build_sam3_image_model
     from sam3.model.sam3_image_processor import Sam3Processor
 
@@ -61,18 +83,17 @@ def main():
     )
     processor = Sam3Processor(model, device="cuda")
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-        state = processor.set_image(Image.open(args.image).convert("RGB"))
-        masks, scores, _ = model.predict_inst(
-            state,
-            point_coords=np.array([[args.x, args.y]], dtype=np.float32),
-            point_labels=np.array([1], dtype=np.int32),
-            multimask_output=True,
-        )
-    mask, score = choose_mask(masks, scores, args.x, args.y)
+        state = processor.set_image(image)
+        prompt = {'box': np.asarray(args.box, dtype=np.float32)} if args.box else {
+            'point_coords': np.array([[args.x, args.y]], dtype=np.float32),
+            'point_labels': np.array([1], dtype=np.int32)}
+        masks, scores, _ = model.predict_inst(state, multimask_output=True, **prompt)
+    mask, score = choose_mask(masks, scores, args.x, args.y, args.box)
     np.save(args.out / "mask.npy", mask)
     Image.fromarray(mask.astype(np.uint8) * 255).save(args.out / "mask.png")
     report = {
-        "method": "SAM3 positive point prompt",
+        "method": "SAM3 box prompt" if args.box else "SAM3 positive point prompt",
+        "box_xyxy": args.box,
         "score": score,
         "pixels": int(mask.sum()),
         "point_xy": [args.x, args.y],
