@@ -17,7 +17,7 @@ Posed RGB-D, calibration and provenance. LIBERO and BEHAVIOR state alignment are
 
 ```bash
 uv run physicalview run datasets --action libero -- --roster examples/libero-roster.json --index 0 --root data/libero
-uv run physicalview run datasets --action behavior -- --task 0002 --scene-name behavior_task0002 --root data/behavior --tasks-config examples/behavior-tasks.yaml
+uv run physicalview run datasets --action behavior -- --task 0002 --scene-name behavior_task0002 --root data/behavior --tasks-config /path/to/behavior-tasks.yaml
 ```
 
 Use `plan` instead of `run` to inspect the exact argv, environment, inputs and declared
