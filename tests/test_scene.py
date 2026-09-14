@@ -67,6 +67,8 @@ def _make_result_set(root: Path, name: str, n_obj: int = 2, n_rej: int = 1) -> P
     ("droid_iris_mon_apr_17_16_03_25_2023", "droid", "droid_iris_mon_apr_17_16_03_25_2023"),
     ("video_pilot_a29cccc784", "video", "pilot_a29cccc784"),
     ("behavior_task0002_severe", "behavior", "behavior_task0002_severe"),
+    # outputs/behavior_task-0020 was built as scene behavior_task0020 (dashes stripped)
+    ("behavior_task-0020", "behavior", "behavior_task0020"),
 ])
 def test_classify_result_dir(name, kind, scene):
     assert S.classify_result_dir(name) == (kind, scene)
